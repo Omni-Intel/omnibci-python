@@ -2,7 +2,7 @@ name: Build and test Python SDK
 on:
   push:
     branches: [master]
-    tags: ['v*']
+    tags: ['v*.*.*']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -12,7 +12,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-24.04, macos-latest]
+        include:
+          - { os: windows-latest, min_python: '3.11' }
+          - { os: windows-11-arm, min_python: '3.11' }
+          - { os: ubuntu-24.04, min_python: '3.11' }
+          - { os: ubuntu-24.04-arm, min_python: '3.11' }
+          - { os: macos-15-intel, min_python: '3.11' }
+          - { os: macos-15, min_python: '3.11' }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -22,7 +28,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.min_python }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -44,10 +50,10 @@ jobs:
         with:
           maturin-version: v1.15.0
           command: build
-          args: --release --locked --out dist -i ${{ runner.os == 'Linux' && 'python3.10' || 'python' }}
+          args: --release --locked --out dist -i ${{ runner.os == 'Linux' && 'python3.11' || 'python' }}
           manylinux: '2_28'
           before-script-linux: dnf install -y dbus-devel systemd-devel pkgconf-pkg-config
-      - name: Install wheel and test Python 3.10
+      - name: Install wheel and test minimum Python
         shell: bash
         run: |
           python -m pip install pytest ruff==0.16.9 dist/*.whl
@@ -81,7 +87,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
+          python-version: '3.11'
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
       - run: python -m pip install maturin==1.15.0 pytest ruff==0.16.9
@@ -93,8 +99,65 @@ jobs:
           python tests/check_artifacts.py
           ruff check python tests examples
           ruff format --check python tests examples
-      - uses: actions/upload-artifact@v6
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [wheels, source]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
         with:
-          name: source
-          path: dist/*.tar.gz
-          if-no-files-found: error
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - name: Check release tag, versions, and files
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+          import tomllib
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag) is None:
+              raise SystemExit(f"Release tag must be vX.X.X: {tag}")
+          version = tag[1:]
+          for name, section in (("pyproject.toml", "project"), ("Cargo.toml", "package")):
+              actual = tomllib.loads(pathlib.Path(name).read_text(encoding="utf-8"))[section]["version"]
+              if actual != version:
+                  raise SystemExit(f"{name} version {actual} does not match {tag}")
+          init = pathlib.Path("python/omnibci/__init__.py").read_text(encoding="utf-8")
+          if f'__version__ = "{version}"' not in init:
+              raise SystemExit(f"Python __version__ does not match {tag}")
+
+          files = sorted(pathlib.Path("dist").iterdir())
+          wheels = [file for file in files if file.suffix == ".whl"]
+          platforms = ("win_amd64", "win_arm64", "manylinux_2_28_x86_64", "manylinux_2_28_aarch64")
+          if len(files) != 6 or len(wheels) != 6:
+              raise SystemExit(f"Expected six wheels, got: {[file.name for file in files]}")
+          for platform in platforms:
+              if sum(platform in file.name for file in wheels) != 1:
+                  raise SystemExit(f"Expected one {platform} wheel")
+          for arch in ("x86_64", "arm64"):
+              if sum("macosx_" in file.name and file.name.endswith(f"_{arch}.whl") for file in wheels) != 1:
+                  raise SystemExit(f"Expected one macOS {arch} wheel")
+          if any(not file.name.startswith(f"omnibci-{version}-cp311-abi3-") for file in wheels):
+              raise SystemExit("Wheel name or ABI does not match the release")
+          PY
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.whl
+          fail_on_unmatched_files: true
+          generate_release_notes: true

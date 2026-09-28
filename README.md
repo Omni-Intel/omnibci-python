@@ -9,14 +9,20 @@
 Python 3.11+（标准 CPython，非 free-threaded 版本）。发行包名和导入名均为 `omnibci`。
 
 ```sh
-# 发布到 PyPI 后，安装匹配平台的预编译 wheel，不需要 Rust
-python -m pip install --only-binary=:all: omnibci
-
-# 尚未发布时，安装 CI artifact 或本地生成的 wheel
+# 从 GitHub Release 下载匹配平台的 wheel 后安装，不需要 Rust
 python -m pip install path/to/omnibci-0.1.2-cp311-abi3-win_amd64.whl
 ```
 
-本仓库不会因推送代码自动发布 PyPI。Windows x64 wheel 已在本机验证；CI 配置了 Windows x64、Linux x64（manylinux_2_28）和 macOS runner 原生架构的构建与安装测试，其实际状态以 Actions 结果为准。ABI3 wheel 面向 CPython 3.11+，CI 验证 3.11 和 3.14。不提供 PyPy、32 位或 free-threaded wheel。
+仓库公开且对应版本的 Release 已发布后，也可以让 pip 从该 Release 的附件中按平台选择 wheel：
+
+```sh
+python -m pip install "numpy>=1.26"
+python -m pip install --no-index --no-deps --only-binary=:all: --find-links https://github.com/Omni-Intel/omnibci-python/releases/expanded_assets/v0.1.2 "omnibci==0.1.2"
+```
+
+`--find-links` 读取指定版本的 Release 附件页，`--no-index` 保证 `omnibci` 只从该页获取；因此先单独安装 NumPy。GitHub 的 `expanded_assets` 地址可供 pip 读取，但不是正式的 Python 包索引接口，若 GitHub 调整该页面，请改为下载并安装对应 wheel。`--index-url` 需要符合 Python Simple API 的索引，不能直接指向 GitHub Release 页面。
+
+推送 `vX.X.X` 标签后，CI 会在测试通过时把 wheel 发布到 [GitHub Releases](https://github.com/Omni-Intel/omnibci-python/releases)，不会发布到 PyPI。Release 自带 GitHub 生成的源码 ZIP/TAR.GZ；CI 另行构建并测试 Python 源码发行包，但不上传为 Release 附件。GitHub 自动源码包不含 `sdk` 子模块的文件，不能直接代替可构建的 Python 源码发行包；需要从源码安装时请使用 `git clone --recurse-submodules`。构建目标包括 Windows x64 / ARM64、Linux x64 / ARM64（manylinux_2_28）和 macOS Intel / Apple Silicon；实际构建状态以 Actions 结果为准。ABI3 wheel 面向 CPython 3.11+，CI 在六个平台验证 3.11 / 3.14。不提供 PyPy、32 位或 free-threaded wheel。
 
 串口需要系统识别设备及相应驱动/访问权限。BLE 需要蓝牙适配器；Linux 使用 BlueZ/D-Bus，macOS 需要终端或 Python 宿主的蓝牙权限。关闭其他占用板子的 GUI/程序后再连接。
 
@@ -152,7 +158,13 @@ maturin sdist --out dist
 
 `decode_frames(bytes, gains=...)` 可离线解码完整串口缓冲区，复用 Rust SDK。它不是增量解析器，每次调用独立，末尾不完整帧不会保留到下一次调用。
 
-CI 将生成 wheel 与源码包 artifact，并在 Python 3.11 / 3.14 上安装测试 wheel。若 SDK 仓库私有，在 Python 仓库配置具有 SDK 只读权限的 `SUBMODULES_READ_TOKEN` secret；默认 `GITHUB_TOKEN` 无法读取其他私有仓库。公开发布前需确认发行名、版本、许可证、PyPI 权限，并完成目标板 USB/BLE 实测。
+CI 将生成 wheel artifact，并构建、安装测试源码包；wheel 在 Python 3.11 / 3.14 上安装测试。若 SDK 仓库私有，在 Python 仓库配置具有 SDK 只读权限的 `SUBMODULES_READ_TOKEN` secret；默认 `GITHUB_TOKEN` 无法读取其他私有仓库。
+
+## GitHub Release 发布
+
+发布前把 `pyproject.toml` 的 `project.version`、`Cargo.toml` 的 `package.version` 和 `python/omnibci/__init__.py` 的 `__version__` 改为同一个 `X.X.X`，运行 `cargo check` 更新 `Cargo.lock`，并提交这些文件。然后在该提交上创建并推送 `vX.X.X` 标签，例如 `v0.1.3`。CI 会检查标签与这三个版本一致，完成各平台构建、安装测试和源码包测试后创建 GitHub Release，仅附上六个平台的 wheel。标签不符合格式、版本不一致或缺少任何 wheel 时不会发布。重新运行同一标签的工作流会更新该 Release 的附件。
+
+发布前还应完成目标板 USB/BLE 实测；CI 的自动测试不连接硬件。
 
 ## 许可证
 
