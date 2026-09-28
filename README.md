@@ -13,7 +13,7 @@ Python 3.11+（标准 CPython，非 free-threaded 版本）。发行包名和导
 python -m pip install --only-binary=:all: omnibci
 
 # 尚未发布时，安装 CI artifact 或本地生成的 wheel
-python -m pip install path/to/omnibci-0.1.0-cp311-abi3-win_amd64.whl
+python -m pip install path/to/omnibci-0.1.2-cp311-abi3-win_amd64.whl
 ```
 
 本仓库不会因推送代码自动发布 PyPI。Windows x64 wheel 已在本机验证；CI 配置了 Windows x64、Linux x64（manylinux_2_28）和 macOS runner 原生架构的构建与安装测试，其实际状态以 Actions 结果为准。ABI3 wheel 面向 CPython 3.11+，CI 验证 3.11 和 3.14。不提供 PyPy、32 位或 free-threaded wheel。

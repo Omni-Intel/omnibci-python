@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "omnibci-python"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "omnibci-sdk",
  "pyo3",
