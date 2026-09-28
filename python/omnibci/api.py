@@ -358,12 +358,7 @@ class Board:
             if exc is None:
                 raise
             note = f"OmniBCI cleanup also failed: {close_error}"
-            if hasattr(exc, "add_note"):
-                exc.add_note(note)
-            else:
-                # Python 3.10 has no add_note; retain cleanup details without
-                # replacing the original exception.
-                exc.__notes__ = [*getattr(exc, "__notes__", []), note]
+            exc.add_note(note)
         return False
 
 

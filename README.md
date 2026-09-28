@@ -6,17 +6,17 @@
 
 ## 安装
 
-Python 3.10+（标准 CPython，非 free-threaded 版本）。发行包名和导入名均为 `omnibci`。
+Python 3.11+（标准 CPython，非 free-threaded 版本）。发行包名和导入名均为 `omnibci`。
 
 ```sh
 # 发布到 PyPI 后，安装匹配平台的预编译 wheel，不需要 Rust
 python -m pip install --only-binary=:all: omnibci
 
 # 尚未发布时，安装 CI artifact 或本地生成的 wheel
-python -m pip install path/to/omnibci-0.1.2-cp310-abi3-win_amd64.whl
+python -m pip install path/to/omnibci-0.1.2-cp311-abi3-win_amd64.whl
 ```
 
-本仓库不会因推送代码自动发布 PyPI。Windows x64 wheel 已在本机验证；CI 配置了 Windows x64、Linux x64（manylinux_2_28）和 macOS runner 原生架构的构建与安装测试，其实际状态以 Actions 结果为准。ABI3 wheel 面向 CPython 3.10+，CI 验证 3.10 和 3.14。不提供 PyPy、32 位或 free-threaded wheel。
+本仓库不会因推送代码自动发布 PyPI。Windows x64 wheel 已在本机验证；CI 配置了 Windows x64、Linux x64（manylinux_2_28）和 macOS runner 原生架构的构建与安装测试，其实际状态以 Actions 结果为准。ABI3 wheel 面向 CPython 3.11+，CI 验证 3.11 和 3.14。不提供 PyPy、32 位或 free-threaded wheel。
 
 串口需要系统识别设备及相应驱动/访问权限。BLE 需要蓝牙适配器；Linux 使用 BlueZ/D-Bus，macOS 需要终端或 Python 宿主的蓝牙权限。关闭其他占用板子的 GUI/程序后再连接。
 
@@ -128,8 +128,8 @@ timeout 单位秒，范围 `(0, 60]`。一次固定长度读取共用一个超�
 
 ## 开发与验证
 
-仓库的 `.python-version` 将 uv 默认解释器设为 Python 3.10。使用 uv 时可运行
-`uv python install` 和 `uv venv` 创建开发环境；包本身支持 CPython 3.10 及以上版本。
+仓库的 `.python-version` 将 uv 默认解释器设为 Python 3.11。使用 uv 时可运行
+`uv python install` 和 `uv venv` 创建开发环境；包本身支持 CPython 3.11 及以上版本。
 
 ```sh
 git clone --recurse-submodules git@github.com:Omni-Intel/omnibci-python.git
@@ -152,7 +152,7 @@ maturin sdist --out dist
 
 `decode_frames(bytes, gains=...)` 可离线解码完整串口缓冲区，复用 Rust SDK。它不是增量解析器，每次调用独立，末尾不完整帧不会保留到下一次调用。
 
-CI 将生成 wheel 与源码包 artifact，并在 Python 3.10 / 3.14 上安装测试 wheel。若 SDK 仓库私有，在 Python 仓库配置具有 SDK 只读权限的 `SUBMODULES_READ_TOKEN` secret；默认 `GITHUB_TOKEN` 无法读取其他私有仓库。公开发布前需确认发行名、版本、许可证、PyPI 权限，并完成目标板 USB/BLE 实测。
+CI 将生成 wheel 与源码包 artifact，并在 Python 3.11 / 3.14 上安装测试 wheel。若 SDK 仓库私有，在 Python 仓库配置具有 SDK 只读权限的 `SUBMODULES_READ_TOKEN` secret；默认 `GITHUB_TOKEN` 无法读取其他私有仓库。公开发布前需确认发行名、版本、许可证、PyPI 权限，并完成目标板 USB/BLE 实测。
 
 ## 许可证
 
