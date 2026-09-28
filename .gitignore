@@ -1,0 +1,13 @@
+/target/
+/.venv*/
+/dist/
+/artifacts/
+__pycache__/
+.pytest_cache/
+*.pyc
+[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+*.pyd
+*.so
+*.dylib
+.ruff_cache/
+*.pdb

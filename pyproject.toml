@@ -1,0 +1,42 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "omnibci"
+version = "0.1.0"
+description = "Direct USB and BLE acquisition for OmniBCI boards, powered by the Rust SDK"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.urls]
+Source = "https://github.com/Omni-Intel/omnibci-python"
+Issues = "https://github.com/Omni-Intel/omnibci-python/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "omnibci._native"
+features = ["pyo3/extension-module"]
+include = [{ path = "sdk/**/*.rs", format = "sdist" }, { path = "sdk/Cargo.toml", format = "sdist" }, { path = "tests/**/*.py", format = "sdist" }, { path = "examples/*.py", format = "sdist" }]
+exclude = ["**/AGENTS.md", "**/agents.md", "sdk/target/**", "**/*.pdb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["hardware: explicit real-board tests; requires an endpoint"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

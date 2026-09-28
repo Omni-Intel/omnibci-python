@@ -1,0 +1,17 @@
+[package]
+name = "omnibci-python"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Python bindings for the OmniBCI Rust device SDK"
+repository = "https://github.com/Omni-Intel/omnibci-python"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+omnibci-sdk = { path = "sdk", version = "0.1.0", features = ["esp32"] }
+pyo3 = { version = "0.29.2", features = ["abi3-py311"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
