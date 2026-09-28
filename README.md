@@ -82,7 +82,7 @@ with Board.connect("serial://COM5") as board:
 | `mode` | `both_bias` / `eeg` / `no_bias` / `shorted` / `test` |
 | `enabled_mask` | 通道使能，bit 0 对应第 1 通道 |
 | `bias_mask` | BIAS 通道选择，必须是已启用通道的子集 |
-| `srb2_mask` | SRB2 通道选择；SRB1 模式必须为 0 |
+| `srb2_mask` | SRB2 通道选择，必须是已启用通道的子集；SRB1 模式下可保留非零选择，实际开关由参考模式控制 |
 | `gains` | 8 个增益，允许 1、2、4、6、8、12、24 |
 | `verified` | SDK 返回的硬件配置确认标记，发送配置时忽略此字段 |
 

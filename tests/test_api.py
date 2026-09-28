@@ -77,7 +77,7 @@ def test_empty_and_truncated_input():
         dict(gains=(True,) * 8),
         dict(enabled_mask=256),
         dict(enabled_mask=1),
-        dict(srb2_mask=1),
+        dict(enabled_mask=1, bias_mask=1, srb2_mask=2),
         dict(reference="unknown"),
         dict(mode="unknown"),
     ],
@@ -142,6 +142,24 @@ class FakeDevice:
                 error=None,
             )
         )
+
+
+@pytest.mark.parametrize("mask", [1, 255])
+def test_srb1_retained_srb2_selection_round_trips_through_board(monkeypatch, mask):
+    fake = FakeDevice()
+    snapshot = json.loads(fake.snapshot_json())
+    snapshot["config"]["srb2_mask"] = mask
+    monkeypatch.setattr(fake, "snapshot_json", lambda: json.dumps(snapshot))
+    with o.Board(fake) as board:
+        config = board.get_config()
+        assert config == o.FrontendConfig(srb2_mask=mask, verified=True)
+        assert board.snapshot.config == config
+        assert board.info.hardware == "ADS1299"
+        board.configure(config)
+    expected = {
+        key: value for key, value in snapshot["config"].items() if key != "verified"
+    }
+    assert ("configure", expected) in fake.calls
 
 
 def test_exact_read_keeps_surplus_and_arrays_immutable():

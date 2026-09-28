@@ -71,8 +71,8 @@ class FrontendConfig:
             raise ValueError("gains must contain 8 values from 1, 2, 4, 6, 8, 12, 24")
         if self.bias_mask & ~self.enabled_mask or self.srb2_mask & ~self.enabled_mask:
             raise ValueError("BIAS and SRB2 channels must be enabled")
-        if self.reference == "srb1" and self.srb2_mask:
-            raise ValueError("SRB1 configuration cannot enable SRB2 channels")
+        # Firmware retains the SRB2 selection in SRB1 mode; the reference
+        # mode controls whether those hardware switches are active.
         object.__setattr__(self, "gains", gains)
 
     def _wire(self) -> dict:
