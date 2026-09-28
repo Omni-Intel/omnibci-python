@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 description = "Python bindings for the OmniBCI Rust device SDK"
 repository = "https://github.com/Omni-Intel/omnibci-python"
+license = "BSD-3-Clause"
 
 [lib]
 name = "_native"

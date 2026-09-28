@@ -7,6 +7,7 @@ name = "omnibci"
 version = "0.1.2"
 description = "Direct USB and BLE acquisition for OmniBCI boards, powered by the Rust SDK"
 readme = "README.md"
+license = "BSD-3-Clause"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.26"]
 classifiers = [
@@ -28,7 +29,7 @@ Issues = "https://github.com/Omni-Intel/omnibci-python/issues"
 python-source = "python"
 module-name = "omnibci._native"
 features = ["pyo3/extension-module"]
-include = [{ path = "sdk/**/*.rs", format = "sdist" }, { path = "sdk/Cargo.toml", format = "sdist" }, { path = "tests/**/*.py", format = "sdist" }, { path = "examples/*.py", format = "sdist" }]
+include = [{ path = "sdk/**/*.rs", format = "sdist" }, { path = "sdk/Cargo.toml", format = "sdist" }, { path = "sdk/LICENSE", format = "sdist" }, { path = "tests/**/*.py", format = "sdist" }, { path = "examples/*.py", format = "sdist" }]
 exclude = ["**/AGENTS.md", "**/agents.md", "sdk/target/**", "**/*.pdb"]
 
 [tool.pytest.ini_options]

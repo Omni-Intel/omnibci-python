@@ -153,3 +153,7 @@ maturin sdist --out dist
 `decode_frames(bytes, gains=...)` 可离线解码完整串口缓冲区，复用 Rust SDK。它不是增量解析器，每次调用独立，末尾不完整帧不会保留到下一次调用。
 
 CI 将生成 wheel 与源码包 artifact，并在 Python 3.10 / 3.14 上安装测试 wheel。若 SDK 仓库私有，在 Python 仓库配置具有 SDK 只读权限的 `SUBMODULES_READ_TOKEN` secret；默认 `GITHUB_TOKEN` 无法读取其他私有仓库。公开发布前需确认发行名、版本、许可证、PyPI 权限，并完成目标板 USB/BLE 实测。
+
+## 许可证
+
+本项目采用 BSD-3-Clause 许可证，见 [LICENSE](LICENSE)。设备 SDK 是独立的 Git 子模块，许可条款见其 [LICENSE](sdk/LICENSE)。
