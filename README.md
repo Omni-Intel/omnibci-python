@@ -116,6 +116,17 @@ except PartialReadError as error:
 
 timeout 单位秒，范围 `(0, 60]`。一次固定长度读取共用一个超时预算。每个 Board 的操作串行执行；预算不包括等待其他调用释放 Board 锁的时间。原生硬件等待释放 GIL，其他 Python 线程可以运行。当前接口为同步阻塞接口，异步程序可用 `asyncio.to_thread`；取消 Python task 不会中断已开始的原生调用。停止和关闭会等待同一 Board 上正在进行的 read 完成或超时。
 
+## 文档
+
+中文文档：[`docs/index.rst`](docs/index.rst)。
+
+```sh
+python -m pip install -r docs/requirements.txt
+python -m sphinx -n -W --keep-going -b html docs docs/_build/html
+```
+
+生成入口：`docs/_build/html/index.html`。构建与维护说明见 [`docs/development.rst`](docs/development.rst)。
+
 ## 开发
 
 使用 uv 时可运行`uv python install` 和 `uv venv` 创建开发环境；包本身支持 CPython 3.11 及以上版本。
