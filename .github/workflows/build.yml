@@ -74,6 +74,7 @@ jobs:
           name: wheel-${{ matrix.os }}
           path: dist/*.whl
           if-no-files-found: error
+          retention-days: 1
   source:
     runs-on: ubuntu-24.04
     steps:
