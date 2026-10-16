@@ -48,7 +48,8 @@ AE/BE 完整配置事务，32.0.4 不兼容此路径。第一版不提供无线�
 字段 ``enabled_mask``、``bias_mask``、``loff_mask`` 为 32 位无符号整数，
 bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bias
 为 ``0xffffffff``，LOFF 为 0，增益为 32 个 24。增益允许 1、2、4、6、8、12、24。
-``mode`` 使用固件模式编号 0–4；LOFF 仅允许模式 0–2。
+``mode`` 使用 ``both_bias``（默认）、``eeg``、``no_bias``、``shorted``、``test``
+字符串，SDK 分别映射到固件编号 0–4；LOFF 仅允许前三种模式。
 这里不提供 ESP32 的 SRB2 开关或采样率调整。
 
 只在停采时配置，并等待实际硬件确认。LOFF 是激励配置，不是阻抗数值 API；
