@@ -34,6 +34,7 @@ class DeviceInfo:
     transport: Literal["serial", "ble"]
     address: str
     rssi_dbm: int | None = None
+    device_type: Literal["esp32", "stm32"] = "esp32"
 
     @property
     def endpoint(self) -> str:
@@ -98,6 +99,56 @@ class FrontendConfig:
         )
 
 
+@dataclass(frozen=True)
+class Stm32Config:
+    """Confirmed full configuration requires AE/BE-capable 32.0.5 firmware."""
+
+    mode: Literal["both_bias", "eeg", "no_bias", "shorted", "test"] = "both_bias"
+    enabled_mask: int = 0xFFFFFFFF
+    bias_mask: int = 0xFFFFFFFF
+    loff_mask: int = 0
+    gains: tuple[int, ...] = (24,) * 32
+    verified: bool = False
+
+    def __post_init__(self) -> None:
+        if self.mode not in _MODES:
+            raise ValueError("unsupported mode")
+        for name in ("enabled_mask", "bias_mask", "loff_mask"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value <= 0xFFFFFFFF:
+                raise ValueError(f"{name} must be an integer in [0, 4294967295]")
+        gains = tuple(self.gains)
+        if len(gains) != 32 or any(
+            type(g) is not int or g not in (1, 2, 4, 6, 8, 12, 24) for g in gains
+        ):
+            raise ValueError("gains must contain 32 values from 1, 2, 4, 6, 8, 12, 24")
+        if self.bias_mask & ~self.enabled_mask or self.loff_mask & ~self.enabled_mask:
+            raise ValueError("BIAS and LOFF channels must be enabled")
+        if self.loff_mask and _MODES.index(self.mode) > 2:
+            raise ValueError("LOFF requires both_bias, eeg or no_bias mode")
+        object.__setattr__(self, "gains", gains)
+
+    def _wire(self) -> dict:
+        return dict(
+            mode=_MODES.index(self.mode),
+            enabled_mask=self.enabled_mask,
+            bias_mask=self.bias_mask,
+            loff_mask=self.loff_mask,
+            gains=self.gains,
+        )
+
+    @classmethod
+    def _from_wire(cls, value: dict) -> Stm32Config:
+        return cls(
+            mode=_MODES[value["mode"]],
+            enabled_mask=value["enabled_mask"],
+            bias_mask=value["bias_mask"],
+            loff_mask=value["loff_mask"],
+            gains=tuple(value["gains"]),
+            verified=value["verified"],
+        )
+
+
 @dataclass(frozen=True, eq=False)
 class SampleBatch:
     """Read-only arrays in sample-major order; gaps are preserved in sample_indices."""
@@ -130,15 +181,26 @@ class SampleBatch:
 
     @classmethod
     def _from_wire(cls, data: dict) -> SampleBatch:
-        arrays = [
-            np.frombuffer(data[name], dtype=dtype) for name, dtype in _ARRAY_DTYPES
-        ]
-        n = len(arrays[2])
-        arrays[0] = arrays[0].reshape(n, 8)
-        arrays[1] = arrays[1].reshape(n, 8)
-        arrays[5] = arrays[5].reshape(n, 3)
-        if any(len(a) != n for a in arrays):
-            raise _native.TransportError("inconsistent sample buffer lengths")
+        try:
+            width = data.get("channel_count", 8)
+            status_width = data.get("status_width", 3)
+            if (
+                type(width) is not int
+                or type(status_width) is not int
+                or (width, status_width) not in ((8, 3), (32, 12))
+            ):
+                raise ValueError("unsupported sample shape")
+            arrays = [
+                np.frombuffer(data[name], dtype=dtype) for name, dtype in _ARRAY_DTYPES
+            ]
+            n = len(arrays[2])
+            arrays[0] = arrays[0].reshape(n, width)
+            arrays[1] = arrays[1].reshape(n, width)
+            arrays[5] = arrays[5].reshape(n, status_width)
+            if any(len(a) != n for a in arrays):
+                raise ValueError("inconsistent sample buffer lengths")
+        except (ValueError, TypeError, KeyError) as error:
+            raise _native.TransportError("invalid sample buffers") from error
         return cls(
             *arrays,
             data["generation"],
@@ -188,7 +250,7 @@ def _combine(batches: list[SampleBatch]) -> SampleBatch | None:
 class Snapshot:
     state: str
     metadata: DeviceMetadata | None
-    config: FrontendConfig | None
+    config: FrontendConfig | Stm32Config | None
     generation: int
     samples: int
     missing_samples: int
@@ -214,34 +276,61 @@ class Board:
     No Python callback runs in the device's ACK or receive thread.
     """
 
-    def __init__(self, native_device):
+    def __init__(self, native_device, device_type="esp32"):
         self._device = native_device
+        self._device_type = device_type
         self._pending: deque[SampleBatch] = deque()
         self._lock = threading.RLock()
         self._closed = False
 
     @classmethod
-    def connect(cls, device: str | DeviceInfo, *, timeout: float = 15.0) -> Board:
+    def connect(
+        cls,
+        device: str | DeviceInfo,
+        *,
+        timeout: float = 15.0,
+        device_type: Literal["esp32", "stm32"] | None = None,
+    ) -> Board:
+        if isinstance(device, DeviceInfo):
+            if device_type is not None and device_type != device.device_type:
+                raise ValueError("device_type conflicts with discovered device")
+            device_type = _device_type(device.device_type)
+        else:
+            device_type = _device_type("esp32" if device_type is None else device_type)
         endpoint = device.endpoint if isinstance(device, DeviceInfo) else device
         if not isinstance(endpoint, str):
             raise TypeError("device must be an endpoint string or DeviceInfo")
-        return cls(_native.NativeDevice.connect(endpoint, _timeout(timeout)))
+        timeout = _timeout(timeout)
+        native = (
+            _native.NativeDevice.connect(endpoint, timeout)
+            if device_type == "esp32"
+            else _native.NativeDevice.connect(endpoint, timeout, device_type)
+        )
+        return cls(native, device_type)
 
     @staticmethod
     def discover(
-        *, transport: Literal["serial", "ble"] = "serial", timeout: float = 10.0
+        *,
+        transport: Literal["serial", "ble"] = "serial",
+        timeout: float = 10.0,
+        device_type: Literal["esp32", "stm32"] = "esp32",
     ) -> list[DeviceInfo]:
         timeout = _timeout(timeout)
+        _device_type(device_type)
         if transport == "serial":
             # Enumeration does not open ports; entries are candidates, not verified OmniBCI devices.
             return [
-                DeviceInfo(port, port, "serial", port)
+                DeviceInfo(port, port, "serial", port, device_type=device_type)
                 for port in _native.serial_ports()
             ]
         if transport == "ble":
             return [
-                DeviceInfo(transport="ble", **item)
-                for item in json.loads(_native.discover_ble_json(timeout))
+                DeviceInfo(transport="ble", device_type=device_type, **item)
+                for item in json.loads(
+                    _native.discover_ble_json(timeout)
+                    if device_type == "esp32"
+                    else _native.discover_ble_json(timeout, device_type)
+                )
             ]
         raise ValueError("transport must be serial or ble")
 
@@ -253,7 +342,11 @@ class Board:
                 DeviceMetadata(**value["metadata"]) if value["metadata"] else None
             )
             value["config"] = (
-                FrontendConfig._from_wire(value["config"]) if value["config"] else None
+                (
+                    Stm32Config if self._device_type == "stm32" else FrontendConfig
+                )._from_wire(value["config"])
+                if value["config"]
+                else None
             )
             return Snapshot(**value)
 
@@ -261,7 +354,7 @@ class Board:
     def info(self) -> DeviceMetadata | None:
         return self.snapshot.metadata
 
-    def get_config(self) -> FrontendConfig:
+    def get_config(self) -> FrontendConfig | Stm32Config:
         """Return the SDK's last confirmed hardware configuration."""
         config = self.snapshot.config
         if config is None:
@@ -272,9 +365,12 @@ class Board:
         if self._closed:
             raise _native.DisconnectedError("board is closed")
 
-    def configure(self, config: FrontendConfig, *, timeout: float = 3.0) -> None:
-        if not isinstance(config, FrontendConfig):
-            raise TypeError("config must be FrontendConfig")
+    def configure(
+        self, config: FrontendConfig | Stm32Config, *, timeout: float = 3.0
+    ) -> None:
+        expected = Stm32Config if self._device_type == "stm32" else FrontendConfig
+        if not isinstance(config, expected):
+            raise TypeError(f"config must be {expected.__name__}")
         with self._lock:
             self._ensure_open()
             self._device.configure(json.dumps(config._wire()), _timeout(timeout))
@@ -362,13 +458,31 @@ class Board:
         return False
 
 
-def decode_frames(data: bytes, *, gains: tuple[int, ...] = (24,) * 8) -> SampleBatch:
+def decode_frames(
+    data: bytes,
+    *,
+    gains: tuple[int, ...] | None = None,
+    device_type: Literal["esp32", "stm32"] = "esp32",
+) -> SampleBatch:
     """Decode a complete raw serial buffer using the SDK, without touching hardware.
 
     Not a streaming parser: trailing partial frames are not retained between calls.
     CRC-invalid frames are skipped by the SDK. Suitable for complete captured buffers.
     """
-    config = FrontendConfig(gains=gains)
+    _device_type(device_type)
+    config_type = Stm32Config if device_type == "stm32" else FrontendConfig
+    config = config_type() if gains is None else config_type(gains=gains)
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes")
-    return SampleBatch._from_wire(_native.decode_frames(data, config.gains))
+    packed = (
+        _native.decode_frames(data, config.gains)
+        if device_type == "esp32"
+        else _native.decode_frames(data, config.gains, device_type)
+    )
+    return SampleBatch._from_wire(packed)
+
+
+def _device_type(value: str) -> str:
+    if value not in ("esp32", "stm32"):
+        raise ValueError("device_type must be esp32 or stm32")
+    return value
