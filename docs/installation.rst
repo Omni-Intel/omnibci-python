@@ -13,13 +13,16 @@
 安装 wheel
 ----------
 
+``32ch`` 开发构建使用分支 CI artifacts 或本机构建的 wheel；未发布 tag 前，
+不要把文档中的 0.2.0 文件名理解为已存在正式 Release。
+
 从 `GitHub Releases <https://github.com/Omni-Intel/omnibci-python/releases>`_
 下载匹配操作系统、CPU 架构和 Python 的 wheel。以下为 Windows x86-64 示例，
 将路径替换为下载文件：
 
 .. code-block:: console
 
-   python -m pip install path/to/omnibci-0.1.2-cp311-abi3-win_amd64.whl
+   python -m pip install path/to/omnibci-0.2.0-cp311-abi3-win_amd64.whl
    python -c "import omnibci; print(omnibci.__version__)"
 
 从源码安装
@@ -30,16 +33,14 @@ Build Tools；Linux 需要 pkg-config、libudev-dev 和 libdbus-1-dev。
 
 .. code-block:: console
 
-   git clone --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
+   git clone --branch 32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
    cd omnibci-python
-   git switch master
-   python -m venv .venv
+   uv sync --locked --all-extras
 
-激活虚拟环境后执行：
+使用该项目环境执行：
 
 .. code-block:: console
 
-   python -m pip install "maturin>=1.15,<2" numpy pytest
-   maturin develop
+   uv run --no-sync maturin develop
 
 已有检出目录使用 ``git submodule update --init --recursive`` 初始化 SDK。

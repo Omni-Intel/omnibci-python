@@ -1,15 +1,39 @@
 # OmniBCI Python
 
-独立 Rust SDK 的 Python 接口。通过 USB 串口或 BLE 连接 OmniBCI ESP32 + ADS1299 板子，配置前端并采集 8 通道、250 Hz EEG。
+独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + E73 的 32 导 USB、ESB Dongle 和 BLE 直连，均为 250 Hz。`32ch` 分支增加的 STM32 路径复用配套 GUI 的 Rust 驱动。
+
+## STM32 32 导 BLE
+
+```python
+from omnibci import Board
+
+devices = Board.discover(transport="ble", device_type="stm32", timeout=10)
+if not devices:
+    raise RuntimeError("未发现 OmniBCI32-BLE")
+# 多台设备时，请按设备标识选择目标；这里以第一台为例。
+with Board.connect(devices[0], timeout=20) as board:
+    print(board.get_config())
+    board.start()
+    batch = board.read(250, timeout=5)
+    print(batch.eeg_uv.shape)  # (250, 32)
+    board.stop()
+```
+
+板端 USB／ESB Dongle 使用 `Board.connect("serial://COM5", device_type="stm32")`。
+原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务；要求实际 TX/RX 2M、MTU ≥153、SPI 桥接或处于 BLE 模式的双模镜像，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
+
+这版连接当前无线模式，不提供 BLE／dongle 模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
 ## 安装
 
 **Python 3.11+**
 
+`32ch` 的开发 wheel 从分支 CI artifacts 获取或按下文构建；正式版本 tag 发布后才出现在 Releases。
+
 从 [Release](https://github.com/Omni-Intel/omnibci-python/releases/latest) 下载匹配平台的 wheel 后安装：
 
 ```sh
-python -m pip install path/to/omnibci-0.1.2-cp311-abi3-win_amd64.whl
+python -m pip install path/to/omnibci-0.2.0-cp311-abi3-win_amd64.whl
 ```
 
 串口需要系统识别设备及相应驱动/访问权限。BLE 需要蓝牙适配器；Linux 使用 BlueZ/D-Bus，macOS 需要终端或 Python 宿主的蓝牙权限。关闭其他占用板子的 GUI/程序后再连接。
@@ -121,29 +145,27 @@ timeout 单位秒，范围 `(0, 60]`。一次固定长度读取共用一个超�
 中文文档：[`docs/index.rst`](docs/index.rst)。
 
 ```sh
-python -m pip install -r docs/requirements.txt
-python -m sphinx -n -W --keep-going -b html docs docs/_build/html
+uv sync --locked --all-extras
+uv run --no-sync python -m sphinx -n -W --keep-going -b html docs docs/_build/html
 ```
 
 生成入口：`docs/_build/html/index.html`。构建与维护说明见 [`docs/development.rst`](docs/development.rst)。
 
 ## 开发
 
-使用 uv 时可运行`uv python install` 和 `uv venv` 创建开发环境；包本身支持 CPython 3.11 及以上版本。
+使用本仓库提交的 `uv.lock` 创建独立环境；包支持 CPython 3.11 及以上版本。
 
 ```sh
-git clone --recurse-submodules git@github.com:Omni-Intel/omnibci-python.git
+git clone --branch 32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
 cd omnibci-python
-git switch master
-python -m venv .venv
-# 激活 .venv 后
-python -m pip install "maturin>=1.15,<2" numpy pytest
-maturin develop
-python -m pytest -q
+uv sync --locked --all-extras
+uv run --no-sync maturin develop
+uv run --no-sync python -m pytest -q
+cargo test --locked
 cargo fmt --check
 cargo clippy --locked -- -D warnings
-maturin build --release --locked --out dist
-maturin sdist --out dist
+uv run --no-sync maturin build --release --locked --out dist
+uv run --no-sync maturin sdist --out dist
 ```
 
 源码构建需要 Rust/Cargo（建议最新 stable），Windows 需要 MSVC C++ Build Tools；Linux 需要 pkg-config、libudev-dev、libdbus-1-dev。

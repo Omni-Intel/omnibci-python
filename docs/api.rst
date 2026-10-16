@@ -13,14 +13,15 @@ Board
 
    持有单个设备，用 :py:meth:`connect` 创建。支持 ``with``，退出时关闭设备。
 
-   .. py:classmethod:: connect(device: str | DeviceInfo, *, timeout: float = 15.0) -> Board
+   .. py:classmethod:: connect(device: str | DeviceInfo, *, timeout: float = 15.0, device_type: str | None = None) -> Board
 
       连接设备并等待 SDK 确认就绪。
 
       :param device: ``serial://PORT``、``ble://KEY`` 或设备发现返回的对象。
       :param timeout: 连接超时秒数，范围 ``(0, 60]``。
+      :param device_type: ``"esp32"`` 或 ``"stm32"``；省略时使用 DeviceInfo 中的类型，字符串入口默认为 ESP32。
 
-   .. py:staticmethod:: discover(*, transport: str = "serial", timeout: float = 10.0) -> list[DeviceInfo]
+   .. py:staticmethod:: discover(*, transport: str = "serial", timeout: float = 10.0, device_type: str = "esp32") -> list[DeviceInfo]
 
       枚举串口候选或扫描 BLE。``transport`` 只能是 ``"serial"`` 或 ``"ble"``。
       串口枚举不会连接并验证候选设备；timeout 仍会校验，但不用于串口枚举等待。
@@ -35,12 +36,12 @@ Board
 
       快照中的设备元信息，尚不可用时为 ``None``。
 
-   .. py:method:: get_config() -> FrontendConfig
+   .. py:method:: get_config() -> FrontendConfig | Stm32Config
 
       返回 SDK 最后确认的硬件配置；没有已确认配置时抛出
       :py:exc:`InvalidStateError`。
 
-   .. py:method:: configure(config: FrontendConfig, *, timeout: float = 3.0) -> None
+   .. py:method:: configure(config: FrontendConfig | Stm32Config, *, timeout: float = 3.0) -> None
 
       发送配置并等待确认。应在停止采集时调用。
       ``config.verified`` 不参与下发。
@@ -83,7 +84,7 @@ Board
 DeviceInfo
 ----------
 
-.. py:class:: DeviceInfo(id: str, name: str, transport: str, address: str, rssi_dbm: int | None = None)
+.. py:class:: DeviceInfo(id: str, name: str, transport: str, address: str, rssi_dbm: int | None = None, device_type: str = "esp32")
 
    设备发现结果，不可变数据类。
 
@@ -182,6 +183,16 @@ FrontendConfig
 
       SDK 返回的配置确认标记。
 
+Stm32Config
+-----------
+
+.. py:class:: Stm32Config(mode=0, enabled_mask=4294967295, bias_mask=4294967295, loff_mask=0, gains=(24,) * 32, verified=False)
+
+   STM32 32 导不可变配置。mode 为 0–4 的固件模式编号，掩码为 32 位整数；
+   BIAS/LOFF 必须是 enabled 的子集，LOFF 只用于模式 0–2。
+   gains 为 32 个允许的 PGA 增益，verified 表示实际硬件确认，不参与下发。
+   用法与固件限制见 :doc:`stm32`。
+
 SampleBatch
 -----------
 
@@ -193,12 +204,12 @@ SampleBatch
    .. py:attribute:: eeg_uv
       :type: NDArray
 
-      float32，形状 ``(N, 8)``，按各通道增益换算的微伏值。
+      float32，形状 ``(N, 8)`` 或 STM32 的 ``(N, 32)``，按各通道增益换算的微伏值。
 
    .. py:attribute:: raw_counts
       :type: NDArray
 
-      int32，形状 ``(N, 8)``，ADS1299 有符号 24 位原始计数。
+      int32，形状 ``(N, 8)`` 或 STM32 的 ``(N, 32)``，ADS1299 有符号 24 位原始计数。
 
    .. py:attribute:: sequence
       :type: NDArray
@@ -218,7 +229,7 @@ SampleBatch
    .. py:attribute:: status
       :type: NDArray
 
-      uint8，形状 ``(N, 3)``，ADS 状态字节。
+      uint8，形状 ``(N, 3)`` 或 STM32 的 ``(N, 12)``，ADS 状态字节。
 
    .. py:attribute:: mode
       :type: NDArray
@@ -304,12 +315,13 @@ Snapshot
 离线函数
 --------
 
-.. py:function:: decode_frames(data: bytes, *, gains: tuple[int, ...] = (24, 24, 24, 24, 24, 24, 24, 24)) -> SampleBatch
+.. py:function:: decode_frames(data: bytes, *, gains: tuple[int, ...] | None = None, device_type: str = "esp32") -> SampleBatch
 
    解码完整原始串口缓冲区，不访问硬件。
 
    :param data: 原始串口协议字节流。
-   :param gains: 采集时的 8 个通道增益，用于微伏换算。
+   :param gains: 采集时的 8 或 32 个通道增益；省略时按设备类型使用每通道 24。
+   :param device_type: ``"esp32"`` 或 ``"stm32"``，选择对应的原始串口协议。
 
    跳过 CRC 错误帧，丢弃末尾不完整帧。
    参数类型错误或配置无效会抛出 TypeError / ValueError。

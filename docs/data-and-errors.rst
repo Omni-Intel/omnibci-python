@@ -7,6 +7,8 @@
 :py:class:`omnibci.SampleBatch` 的数组以样本为第一维。
 SDK 返回的数组只读；需要原地处理时使用 ``batch.eeg_uv.copy()``。
 ``valid`` 标志不会自动过滤数据，按需使用 ``batch.eeg_uv[batch.valid]``。
+ESP32 的 EEG/状态形状为 ``(N,8)``/``(N,3)``，STM32 为 ``(N,32)``/``(N,12)``。
+不同设备布局的批次不能合并。32 导示例见 :doc:`stm32`。
 
 ``sample_indices`` 保留本次采集的丢包间隔，SDK 不补零。
 ``sample_time_s`` 等于 ``sample_indices / sample_rate_hz``。
