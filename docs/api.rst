@@ -118,12 +118,46 @@ DeviceInfo
 
       根据 transport 和 id 生成的连接字符串。
 
+ComponentFirmware
+-----------------
+
+.. py:class:: ComponentFirmware(version: str | None = None, revision: str | None = None, dirty: bool | None = None, state: str = "", protocol: str = "")
+
+   单个组件独立报告的固件来源信息，不可变数据类。
+   由 :py:attr:`DeviceMetadata.stm32` 或 :py:attr:`DeviceMetadata.e73` 提供。
+
+   .. py:attribute:: version
+      :type: str | None
+
+      组件固件版本；不可用时为 None。
+
+   .. py:attribute:: revision
+      :type: str | None
+
+      组件报告的 Git revision；未知或不可用时为 None。
+
+   .. py:attribute:: dirty
+      :type: bool | None
+
+      工作区是否有未提交修改；未知或不可用时为 None。
+
+   .. py:attribute:: state
+      :type: str
+
+      ``available``、``unsupported``、``timeout`` 或 ``read_failed``。
+
+   .. py:attribute:: protocol
+      :type: str
+
+      该组件报告的协议信息。
+
 DeviceMetadata
 --------------
 
-.. py:class:: DeviceMetadata(firmware: str, hardware: str, protocol: str)
+.. py:class:: DeviceMetadata(firmware: str, hardware: str, protocol: str, stm32: ComponentFirmware | None = None, e73: ComponentFirmware | None = None)
 
-   设备报告的版本信息，不可变数据类。
+   设备报告的版本信息，不可变数据类。顶层字段保留原有 ESP32 含义；
+   ``stm32`` 和 ``e73`` 分别提供各组件独立报告的信息。
 
    .. py:attribute:: firmware
       :type: str
@@ -139,6 +173,16 @@ DeviceMetadata
       :type: str
 
       协议信息。
+
+   .. py:attribute:: stm32
+      :type: ComponentFirmware | None
+
+      STM32 组件信息；非 STM32 设备或尚未报告时为 None。
+
+   .. py:attribute:: e73
+      :type: ComponentFirmware | None
+
+      E73 组件信息；USB 或非 E73 连接为 None。
 
 FrontendConfig
 --------------

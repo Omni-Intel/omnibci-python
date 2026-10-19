@@ -13,7 +13,7 @@
 安装 wheel
 ----------
 
-``32ch`` 开发构建使用分支 CI artifacts 或本机构建的 wheel；未发布 tag 前，
+``dev/32ch`` 开发构建使用分支 CI artifacts 或本机构建的 wheel；未发布 tag 前，
 不要把文档中的 0.2.0 文件名理解为已存在正式 Release。
 
 从 `GitHub Releases <https://github.com/Omni-Intel/omnibci-python/releases>`_
@@ -33,7 +33,7 @@ Build Tools；Linux 需要 pkg-config、libudev-dev 和 libdbus-1-dev。
 
 .. code-block:: console
 
-   git clone --branch 32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
+   git clone --branch dev/32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
    cd omnibci-python
    uv sync --locked --all-extras
 

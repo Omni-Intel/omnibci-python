@@ -35,7 +35,7 @@
 
 SDK 子模块必须固定到可从远端获取的提交；只在本机存在的提交不能作为公开构建依赖。
 发布前核对 Python/Cargo/runtime 版本、SDK_REVISION、源提交、wheel SHA256 和 CI。
-``32ch`` 推送与 PR 执行构建；只有版本 tag 在所有平台通过后发布 GitHub Release。
+``dev/32ch`` 推送与 PR 执行构建；只有版本 tag 在所有平台通过后发布 GitHub Release。
 软件测试不会自动连接或刷写硬件。
 
 实机测试需要用户显式设置 ``OMNIBCI_TEST_ENDPOINT``；STM32 还需设置

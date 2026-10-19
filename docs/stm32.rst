@@ -32,6 +32,11 @@ Linux/macOS 应使用系统提供的串口路径。
 MTU 至少 153。自检镜像不能完成 STM32 配置。STM32 必须支持 32.0.5 系列的
 AE/BE 完整配置事务，32.0.4 不兼容此路径。第一版不提供无线模式切换和自动重连。
 
+``board.info.stm32`` 与 ``board.info.e73`` 分别给出各组件独立报告的版本、Git
+revision、dirty、状态和协议；``state`` 为 ``available``、``unsupported``、
+``timeout`` 或 ``read_failed``。顶层 ``firmware``、``hardware``、``protocol``
+字段继续保留，原有 ESP32 调用不受影响。
+
 配置
 ----
 
@@ -54,7 +59,9 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 
 只在停采时配置，并等待实际硬件确认。LOFF 是激励配置，不是阻抗数值 API；
 本包不复刻 GUI 的阻抗估计和 BIAS 临时补偿流程。关闭时需停采并确认关闭 LOFF，
-失败会报告错误，不能据此认为电极激励已关闭。
+失败会报告错误，不能据此认为电极激励已关闭。``close()`` 先请求停止和断开；
+若 Disconnect 停止失败而驱动仍在运行，会在有限宽限期后发送 Shutdown，由 SDK
+执行尽力停止并退出，清理失败仍会报告。
 
 数据与错误
 ----------
@@ -84,9 +91,9 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 验证范围
 --------
 
-本分支固定到 ``omnibci-sdk`` 的 ``BLE`` 分支提交
-``40ac92a3f78cf2232df944f87c90fe89c160e50d``，与更新后的 GUI 使用同一 SDK 基线。
-此版本将 Windows 同步 BLE 清理移至专用线程，并在旧连接清理完成前阻止新连接建立。
+本分支固定到 ``omnibci-sdk`` 的 ``master`` 分支提交
+``19eda533909ed833ae7b8106df32a80d9255994c``，与更新后的 GUI 使用同一 SDK 基线。
+该基线提供 STM32/E73 组件固件信息，并保留 Windows BLE 后台清理和新连接保护修复。
 ``close()`` 返回不表示 Windows 已完成底层 BLE 资源清理；后续连接仍需等待 SDK
 清理门控。若系统清理持续阻塞，新连接会报告错误，可能需要重启 Python 进程。
 这不提供 Python 会话自动重连，也不代表 BLE ATT ACK 超时根因已经解决。

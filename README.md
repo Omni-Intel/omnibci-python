@@ -1,6 +1,6 @@
 # OmniBCI Python
 
-独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + E73 的 32 导 USB、ESB Dongle 和 BLE 直连，均为 250 Hz。`32ch` 分支增加的 STM32 路径复用配套 GUI 的 Rust 驱动。
+独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + E73 的 32 导 USB、ESB Dongle 和 BLE 直连，均为 250 Hz。`dev/32ch` 分支增加的 STM32 路径复用配套 GUI 的 Rust 驱动。
 
 ## STM32 32 导 BLE
 
@@ -24,13 +24,13 @@ with Board.connect(devices[0], timeout=20) as board:
 
 这版连接当前无线模式，不提供 BLE／dongle 模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
-SDK 固定到 `omnibci-sdk` 的 `BLE` 分支提交 `40ac92a3f78cf2232df944f87c90fe89c160e50d`，包含 Windows BLE 后台清理和新连接保护修复。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
+SDK 固定到 `omnibci-sdk` 的 `master` 分支提交 `19eda533909ed833ae7b8106df32a80d9255994c`。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
 
 ## 安装
 
 **Python 3.11+**
 
-`32ch` 的开发 wheel 从分支 CI artifacts 获取或按下文构建；正式版本 tag 发布后才出现在 Releases。
+`dev/32ch` 的开发 wheel 从分支 CI artifacts 获取或按下文构建；正式版本 tag 发布后才出现在 Releases。
 
 从 [Release](https://github.com/Omni-Intel/omnibci-python/releases/latest) 下载匹配平台的 wheel 后安装：
 
@@ -158,7 +158,7 @@ uv run --no-sync python -m sphinx -n -W --keep-going -b html docs docs/_build/ht
 使用本仓库提交的 `uv.lock` 创建独立环境；包支持 CPython 3.11 及以上版本。
 
 ```sh
-git clone --branch 32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
+git clone --branch dev/32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
 cd omnibci-python
 uv sync --locked --all-extras
 uv run --no-sync maturin develop
