@@ -24,6 +24,8 @@ with Board.connect(devices[0], timeout=20) as board:
 
 这版连接当前无线模式，不提供 BLE／dongle 模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
+SDK 固定到 `omnibci-sdk` 的 `BLE` 分支提交 `40ac92a3f78cf2232df944f87c90fe89c160e50d`，包含 Windows BLE 后台清理和新连接保护修复。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
+
 ## 安装
 
 **Python 3.11+**
