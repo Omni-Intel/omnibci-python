@@ -41,6 +41,24 @@ fn duration(seconds: f64) -> PyResult<Duration> {
     }
     Ok(Duration::from_secs_f64(seconds))
 }
+fn component_json(firmware: omnibci_sdk::transport::ComponentFirmware) -> serde_json::Value {
+    serde_json::json!({
+        "version": firmware.version,
+        "revision": firmware.revision,
+        "dirty": firmware.dirty,
+        "state": firmware.state,
+        "protocol": firmware.protocol,
+    })
+}
+pub(crate) fn metadata_json(metadata: omnibci_sdk::transport::DeviceMetadata) -> serde_json::Value {
+    serde_json::json!({
+        "firmware": metadata.firmware,
+        "hardware": metadata.hardware,
+        "protocol": metadata.protocol,
+        "stm32": metadata.stm32.map(component_json),
+        "e73": metadata.e73.map(component_json),
+    })
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -139,7 +157,7 @@ impl Backend {
             Self::Esp32(d) => {
                 let s = d.snapshot();
                 let config = s.config.map(|c| serde_json::json!({"reference":c.reference,"mode":c.mode,"enabled_mask":c.enabled_mask,"bias_mask":c.bias_mask,"srb2_mask":c.srb2_mask,"gains":c.gains,"verified":c.verified}));
-                let metadata = s.metadata.map(|m| serde_json::json!({"firmware":m.firmware,"hardware":m.hardware,"protocol":m.protocol}));
+                let metadata = s.metadata.map(metadata_json);
                 serde_json::json!({"state":format!("{:?}",s.state).to_lowercase(),"config":config,"metadata":metadata,"generation":s.generation,"samples":s.samples,"missing_samples":s.missing_samples,"crc_errors":s.crc_errors,"ble":s.ble,"error":s.error.map(|e| e.to_string())}).to_string()
             }
         }
@@ -364,7 +382,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "40ac92a3f78cf2232df944f87c90fe89c160e50d")?;
+    m.add("SDK_REVISION", "19eda533909ed833ae7b8106df32a80d9255994c")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",
@@ -417,5 +435,31 @@ mod config_tests {
                 .validate()
                 .is_ok()
         );
+    }
+    #[test]
+    fn metadata_json_keeps_legacy_fields_and_exposes_components() {
+        let metadata = omnibci_sdk::transport::DeviceMetadata {
+            stm32: Some(omnibci_sdk::transport::ComponentFirmware {
+                version: Some("32.1.0".into()),
+                revision: Some("012345abcdef".into()),
+                dirty: Some(true),
+                state: "available".into(),
+                protocol: "EEG V3 · Control V1".into(),
+            }),
+            e73: None,
+            firmware: "STM32 32.1.0".into(),
+            hardware: "STM32H563".into(),
+            protocol: "EEG V3".into(),
+        };
+        let value = metadata_json(metadata);
+        assert_eq!(value["firmware"], "STM32 32.1.0");
+        assert_eq!(value["hardware"], "STM32H563");
+        assert_eq!(value["protocol"], "EEG V3");
+        assert_eq!(value["stm32"]["version"], "32.1.0");
+        assert_eq!(value["stm32"]["revision"], "012345abcdef");
+        assert_eq!(value["stm32"]["dirty"].as_bool(), Some(true));
+        assert_eq!(value["stm32"]["state"], "available");
+        assert_eq!(value["stm32"]["protocol"], "EEG V3 · Control V1");
+        assert!(value["e73"].is_null());
     }
 }

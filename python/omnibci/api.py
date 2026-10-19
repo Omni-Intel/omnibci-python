@@ -42,10 +42,55 @@ class DeviceInfo:
 
 
 @dataclass(frozen=True)
+class ComponentFirmware:
+    """Independently reported firmware provenance for one device component.
+
+    ``state`` is one of ``available``, ``unsupported``, ``timeout`` or
+    ``read_failed``. Version, revision and dirty are absent when the component
+    cannot report trustworthy provenance.
+    """
+
+    version: str | None = None
+    revision: str | None = None
+    dirty: bool | None = None
+    state: str = ""
+    protocol: str = ""
+
+    @classmethod
+    def _from_wire(cls, value: dict) -> ComponentFirmware:
+        return cls(
+            version=value.get("version"),
+            revision=value.get("revision"),
+            dirty=value.get("dirty"),
+            state=value.get("state", ""),
+            protocol=value.get("protocol", ""),
+        )
+
+
+@dataclass(frozen=True)
 class DeviceMetadata:
     firmware: str
     hardware: str
     protocol: str
+    stm32: ComponentFirmware | None = None
+    e73: ComponentFirmware | None = None
+
+    @classmethod
+    def _from_wire(cls, value: dict) -> DeviceMetadata:
+        # Older ESP32 snapshots and mocks omit the component fields entirely.
+        return cls(
+            firmware=value["firmware"],
+            hardware=value["hardware"],
+            protocol=value["protocol"],
+            stm32=(
+                ComponentFirmware._from_wire(value["stm32"])
+                if value.get("stm32")
+                else None
+            ),
+            e73=(
+                ComponentFirmware._from_wire(value["e73"]) if value.get("e73") else None
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -339,7 +384,9 @@ class Board:
         with self._lock:
             value = json.loads(self._device.snapshot_json())
             value["metadata"] = (
-                DeviceMetadata(**value["metadata"]) if value["metadata"] else None
+                DeviceMetadata._from_wire(value["metadata"])
+                if value["metadata"]
+                else None
             )
             value["config"] = (
                 (

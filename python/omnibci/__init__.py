@@ -3,6 +3,7 @@
 from . import _native
 from .api import (
     Board,
+    ComponentFirmware,
     DeviceInfo,
     DeviceMetadata,
     FrontendConfig,
@@ -25,6 +26,7 @@ SDK_VERSION = _native.SDK_VERSION
 SDK_REVISION = _native.SDK_REVISION
 __all__ = [
     "Board",
+    "ComponentFirmware",
     "DeviceInfo",
     "DeviceMetadata",
     "FrontendConfig",

@@ -1,5 +1,5 @@
 //! Synchronous STM32 owner. The SDK alone owns wire transactions and radio framing.
-use crossbeam_channel::{Sender, bounded};
+use crossbeam_channel::{SendTimeoutError, Sender, bounded};
 use omnibci_sdk::{
     session::{Error, Samples, State},
     stm32::{Configuration, Parser},
@@ -27,6 +27,7 @@ struct Core {
     config: Option<Configuration>,
     metadata: Option<DeviceMetadata>,
     error: Option<Error>,
+    cleanup_stop_error: Option<Error>,
     pending: Option<Action>,
     control_deadline: Option<Instant>,
     connected: bool,
@@ -49,6 +50,7 @@ impl Default for Core {
             config: None,
             metadata: None,
             error: None,
+            cleanup_stop_error: None,
             pending: None,
             control_deadline: None,
             connected: false,
@@ -74,6 +76,13 @@ impl Core {
         self.state = State::Faulted;
         self.pending = None;
         self.control_deadline = None;
+    }
+    /// Keep the first distinct cleanup report for close diagnostics. The
+    /// primary fault remains in `error`; an identical report is not repeated.
+    fn record_cleanup(&mut self, error: Error) {
+        if self.cleanup_stop_error.is_none() && self.error.as_ref() != Some(&error) {
+            self.cleanup_stop_error = Some(error);
+        }
     }
     fn begin(&mut self, action: Action) -> Result<Command> {
         if let Some(error) = &self.error {
@@ -111,8 +120,17 @@ impl Core {
         }
         // A timeout invalidates the control generation. No late ACK can revive it.
         if self.error.is_some() {
-            if matches!(event, Event::Disconnected) {
-                self.disconnected = true;
+            match event {
+                Event::Disconnected => self.disconnected = true,
+                // Cleanup diagnostics survive an earlier fault without changing
+                // state or masking the primary error.
+                Event::Stm32Stopped(Err(error)) if self.closing => {
+                    self.record_cleanup(Error::Transport(error));
+                }
+                Event::Error(message) if self.closing => {
+                    self.record_cleanup(Error::Transport(message));
+                }
+                _ => {}
             }
             return Ok(());
         }
@@ -158,6 +176,13 @@ impl Core {
                 result.map_err(Error::Transport)?;
                 self.state = State::Ready;
                 self.pending = None;
+            }
+            // A failed Disconnect stop leaves the latest SDK driver running until
+            // Shutdown. Its best-effort cleanup report must not vanish during close.
+            Event::Stm32Stopped(result) if self.pending.is_none() && self.closing => {
+                if let Err(error) = result {
+                    self.record_cleanup(Error::Transport(error));
+                }
             }
             Event::Bytes(bytes)
                 if matches!(
@@ -297,7 +322,9 @@ impl Device {
                     }
                     _ => {}
                 }
-                if core.error.is_some() {
+                // Retry fault cleanup without filling the bounded queue: keep at
+                // most one request pending and add none while close owns cleanup.
+                if core.error.is_some() && !core.closing && control.is_empty() {
                     let _ = control.try_send(Command::Disconnect);
                 }
                 state.changed.notify_all();
@@ -328,6 +355,27 @@ impl Device {
             crossbeam_channel::TrySendError::Full(_) => Error::Overflow,
             _ => Error::Disconnected,
         })
+    }
+    /// Control commands used by cleanup must not be dropped when the bounded
+    /// queue is momentarily full. Always try to enqueue immediately; only
+    /// waiting for a full queue consumes the caller's budget.
+    fn send_before(&self, command: Command, deadline: Instant) -> Result<()> {
+        match self.commands.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => Err(Error::Disconnected),
+            Err(crossbeam_channel::TrySendError::Full(command)) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(Error::Timeout);
+                }
+                self.commands
+                    .send_timeout(command, remaining)
+                    .map_err(|error| match error {
+                        SendTimeoutError::Timeout(_) => Error::Timeout,
+                        SendTimeoutError::Disconnected(_) => Error::Disconnected,
+                    })
+            }
+        }
     }
     fn wait(&self, deadline: Instant, ready: impl Fn(&Core) -> bool) -> Result<()> {
         let mut core = self.shared.core.lock().map_err(|_| Error::WorkerPanicked)?;
@@ -406,7 +454,10 @@ impl Device {
     pub fn snapshot_json(&self) -> String {
         let core = self.shared.core.lock().unwrap();
         let config = core.config.as_ref().map(|c| serde_json::json!({"mode":c.mode,"enabled_mask":c.enabled,"bias_mask":c.bias,"loff_mask":c.loff,"gains":c.gains.as_slice(),"verified":true}));
-        let metadata = core.metadata.as_ref().map(|m| serde_json::json!({"firmware":m.firmware,"hardware":m.hardware,"protocol":m.protocol}));
+        let metadata = core
+            .metadata
+            .as_ref()
+            .map(|m| crate::metadata_json(m.clone()));
         serde_json::json!({"state":format!("{:?}",core.state).to_lowercase(),"config":config,"metadata":metadata,"generation":core.generation,"samples":core.samples,"missing_samples":core.missing,"crc_errors":core.crc,"ble":{},"error":core.error.as_ref().map(ToString::to_string)}).to_string()
     }
     pub fn close(&mut self, timeout: Duration) -> Result<()> {
@@ -432,7 +483,26 @@ impl Device {
             .lock()
             .map_err(|_| Error::WorkerPanicked)?
             .closing = true;
-        let _ = self.send(Command::Disconnect);
+        match self.send_before(Command::Disconnect, deadline) {
+            Ok(()) | Err(Error::Disconnected) => {}
+            Err(error) => cleanup_errors.push(error),
+        }
+        // The latest SDK keeps the driver alive when Disconnect's stop fails.
+        // Allow the normal stop-and-exit path a moment, then request Shutdown,
+        // whose wrapper performs a best-effort stop before the thread exits.
+        // With no remaining budget this waits zero time; send_before still
+        // attempts the enqueue immediately when queue capacity is available.
+        let escalate = (Instant::now() + Duration::from_millis(100)).min(deadline);
+        while self.driver.as_ref().is_some_and(|h| !h.is_finished()) && Instant::now() < escalate {
+            thread::sleep(Duration::from_millis(2));
+        }
+        if self.driver.as_ref().is_some_and(|h| !h.is_finished()) {
+            match self.send_before(Command::Shutdown, deadline) {
+                Ok(()) | Err(Error::Disconnected) => {}
+                Err(error) if !cleanup_errors.contains(&error) => cleanup_errors.push(error),
+                Err(_) => {}
+            }
+        }
         // ponytail: OS drivers cannot be forcibly cancelled; detach on deadline, never join a live worker.
         while self.driver.as_ref().is_some_and(|h| !h.is_finished()) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(2));
@@ -458,6 +528,8 @@ impl Device {
         {
             thread::sleep(Duration::from_millis(1));
         }
+        // A full slot means quit was already queued; Disconnected means the
+        // worker has exited. Neither is a cleanup failure.
         let _ = self.shutdown.try_send(());
         if let Some(worker) = self.worker.take() {
             while !worker.is_finished() && Instant::now() < deadline {
@@ -485,6 +557,15 @@ impl Device {
             result = match result {
                 Ok(()) => Err(cleanup),
                 Err(primary) => Err(Error::Transport(format!("{primary}; cleanup: {cleanup}"))),
+            };
+        }
+        let cleanup_stop = core.cleanup_stop_error.take();
+        if let Some(error) = cleanup_stop
+            && core.error.as_ref() != Some(&error)
+        {
+            result = match result {
+                Ok(()) => Err(error),
+                Err(primary) => Err(Error::Transport(format!("{primary}; cleanup: {error}"))),
             };
         }
         if core.loff_may_be_on {
@@ -975,6 +1056,90 @@ mod stop_loff_tests {
         let error = device.close(Duration::from_secs(1)).unwrap_err();
         assert!(error.to_string().contains("LOFF"), "{error}");
         assert!(error.to_string().contains("SD close failed"), "{error}");
+    }
+}
+#[cfg(test)]
+mod close_escalation_tests {
+    use super::*;
+
+    fn simulated_close(
+        explicit_stop: std::result::Result<(), String>,
+        disconnect_stop: std::result::Result<(), String>,
+        shutdown_stop: std::result::Result<(), String>,
+    ) -> (Device, std::sync::mpsc::Receiver<()>) {
+        let (shutdown, seen) = std::sync::mpsc::channel();
+        let device = Device::connect_with(
+            Duration::from_secs(1),
+            move |commands, events| {
+                thread::spawn(move || {
+                    events.send(Event::Connected("simulated".into())).unwrap();
+                    events
+                        .send(Event::Stm32Configured(Ok(Configuration::default())))
+                        .unwrap();
+                    while let Ok(command) = commands.recv() {
+                        match command {
+                            Command::StopAndDrain => {
+                                events
+                                    .send(Event::Stm32Stopped(explicit_stop.clone()))
+                                    .unwrap();
+                            }
+                            // The latest SDK leaves the driver running when
+                            // Disconnect's stop fails.
+                            Command::Disconnect => {
+                                events
+                                    .send(Event::Stm32Stopped(disconnect_stop.clone()))
+                                    .unwrap();
+                            }
+                            Command::Shutdown => {
+                                events
+                                    .send(Event::Stm32Stopped(shutdown_stop.clone()))
+                                    .unwrap();
+                                let _ = events.send(Event::Disconnected);
+                                let _ = shutdown.send(());
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+            },
+            None,
+        )
+        .unwrap();
+        (device, seen)
+    }
+
+    #[test]
+    fn failed_disconnect_stop_escalates_to_shutdown() {
+        let (mut device, seen) = simulated_close(
+            Err("explicit stop failed".into()),
+            Err("disconnect stop failed".into()),
+            Err("shutdown cleanup failed".into()),
+        );
+        let error = device
+            .close(Duration::from_secs(1))
+            .unwrap_err()
+            .to_string();
+        seen.recv_timeout(Duration::from_secs(1))
+            .expect("close must escalate from Disconnect to Shutdown");
+        assert!(error.contains("explicit stop failed"), "{error}");
+        assert!(error.contains("disconnect stop failed"), "{error}");
+    }
+
+    #[test]
+    fn failed_disconnect_stop_is_reported_after_clean_stop() {
+        let (mut device, seen) = simulated_close(
+            Ok(()),
+            Err("disconnect stop failed".into()),
+            Err("shutdown cleanup failed".into()),
+        );
+        let error = device
+            .close(Duration::from_secs(1))
+            .unwrap_err()
+            .to_string();
+        seen.recv_timeout(Duration::from_secs(1))
+            .expect("close must reject a failed driver cleanup");
+        assert!(error.contains("disconnect stop failed"), "{error}");
     }
 }
 #[cfg(test)]
