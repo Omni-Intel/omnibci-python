@@ -179,10 +179,8 @@ impl Core {
             }
             // A failed Disconnect stop leaves the latest SDK driver running until
             // Shutdown. Its best-effort cleanup report must not vanish during close.
-            Event::Stm32Stopped(result) if self.pending.is_none() && self.closing => {
-                if let Err(error) = result {
-                    self.record_cleanup(Error::Transport(error));
-                }
+            Event::Stm32Stopped(Err(error)) if self.pending.is_none() && self.closing => {
+                self.record_cleanup(Error::Transport(error));
             }
             Event::Bytes(bytes)
                 if matches!(
@@ -637,9 +635,11 @@ mod tests {
     use super::*;
     #[test]
     fn start_requires_ack_and_timeout_rejects_late_ack() {
-        let mut state = Core::default();
-        state.config = Some(Configuration::default());
-        state.state = State::Ready;
+        let mut state = Core {
+            config: Some(Configuration::default()),
+            state: State::Ready,
+            ..Default::default()
+        };
         state.begin(Action::Start).unwrap();
         assert_eq!(state.state, State::Starting);
         state.event(Event::Stm32Started(Ok(()))).unwrap();
@@ -650,8 +650,10 @@ mod tests {
     }
     #[test]
     fn config_requires_matching_ack() {
-        let mut state = Core::default();
-        state.state = State::Ready;
+        let mut state = Core {
+            state: State::Ready,
+            ..Default::default()
+        };
         let wanted = Configuration {
             gains: [12; 32],
             ..Default::default()
@@ -664,8 +666,10 @@ mod tests {
     }
     #[test]
     fn disconnect_faults_generation() {
-        let mut state = Core::default();
-        state.state = State::Streaming;
+        let mut state = Core {
+            state: State::Streaming,
+            ..Default::default()
+        };
         state.event(Event::Disconnected).unwrap();
         assert_eq!(state.state, State::Faulted);
         assert_eq!(state.error, Some(Error::Disconnected));

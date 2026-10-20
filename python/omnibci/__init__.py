@@ -13,6 +13,7 @@ from .api import (
     Stm32Config,
     decode_frames,
 )
+from .trigger import TriggerController
 
 OmniBCIError = _native.OmniBCIError
 DeviceTimeoutError = _native.DeviceTimeoutError
@@ -26,6 +27,7 @@ SDK_VERSION = _native.SDK_VERSION
 SDK_REVISION = _native.SDK_REVISION
 __all__ = [
     "Board",
+    "TriggerController",
     "ComponentFirmware",
     "DeviceInfo",
     "DeviceMetadata",

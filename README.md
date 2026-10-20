@@ -24,7 +24,7 @@ with Board.connect(devices[0], timeout=20) as board:
 
 这版连接当前无线模式，不提供 BLE／dongle 模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
-SDK 固定到 `omnibci-sdk` 的 `master` 分支提交 `3aaebedf61cb5d23e57fe1c44014d08f5845318a`。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
+SDK 固定到 `omnibci-sdk` 的 `master` 分支提交 `aa9ab512ecf6243646fbbb23e9432e3c79eac1ec`。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
 
 ## 安装
 
@@ -171,3 +171,19 @@ uv run --no-sync maturin sdist --out dist
 ```
 
 源码构建需要 Rust/Cargo（建议最新 stable），Windows 需要 MSVC C++ Build Tools；Linux 需要 pkg-config、libudev-dev、libdbus-1-dev。
+
+## Serial trigger dispatch
+
+`TriggerController` uses the shared Rust SDK (`trigger-controller` feature):
+
+```python
+from omnibci import TriggerController
+print(TriggerController.available_ports())  # candidates, not verified generators
+with TriggerController.connect("COM23", timeout=1.0) as trigger:
+    trigger.send(7)  # integer code 0..255; 10000 baud, 8N1
+```
+
+A successful send confirms host dispatch only, not device reception. Write failures
+close the underlying port. Repeated codes and code zero are valid. Context exit closes
+the port, including when the experiment raises an exception. Device trigger timestamp
+reception is a separate API; this sending interface does not synthesize event times.

@@ -1,4 +1,5 @@
-//! Thin CPython adapter; all protocol and device operations remain in omnibci-sdk.
+mod trigger;
+// Thin CPython adapter; all protocol and device operations remain in omnibci-sdk.
 use omnibci_sdk::{
     protocol::FrontendConfig,
     session::{Device, Error, Samples},
@@ -378,11 +379,12 @@ fn decode_frames<'py>(
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeDevice>()?;
+    m.add_class::<trigger::NativeTriggerController>()?;
     m.add_function(wrap_pyfunction!(serial_ports, m)?)?;
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "3aaebedf61cb5d23e57fe1c44014d08f5845318a")?;
+    m.add("SDK_REVISION", "aa9ab512ecf6243646fbbb23e9432e3c79eac1ec")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",
