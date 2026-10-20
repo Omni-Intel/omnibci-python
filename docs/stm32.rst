@@ -92,7 +92,7 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 --------
 
 本分支固定到 ``omnibci-sdk`` 的 ``master`` 分支提交
-``19eda533909ed833ae7b8106df32a80d9255994c``，与更新后的 GUI 使用同一 SDK 基线。
+``3aaebedf61cb5d23e57fe1c44014d08f5845318a``，与更新后的 GUI 使用同一 SDK 基线。
 该基线提供 STM32/E73 组件固件信息，并保留 Windows BLE 后台清理和新连接保护修复。
 ``close()`` 返回不表示 Windows 已完成底层 BLE 资源清理；后续连接仍需等待 SDK
 清理门控。若系统清理持续阻塞，新连接会报告错误，可能需要重启 Python 进程。
