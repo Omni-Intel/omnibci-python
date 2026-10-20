@@ -11,7 +11,10 @@ from .api import (
     SampleBatch,
     Snapshot,
     Stm32Config,
+    TriggerEvent,
+    TriggerTiming,
     decode_frames,
+    decode_triggers,
 )
 from .trigger import TriggerController
 
@@ -27,6 +30,9 @@ SDK_VERSION = _native.SDK_VERSION
 SDK_REVISION = _native.SDK_REVISION
 __all__ = [
     "Board",
+    "TriggerEvent",
+    "TriggerTiming",
+    "decode_triggers",
     "TriggerController",
     "ComponentFirmware",
     "DeviceInfo",

@@ -187,3 +187,5 @@ A successful send confirms host dispatch only, not device reception. Write failu
 close the underlying port. Repeated codes and code zero are valid. Context exit closes
 the port, including when the experiment raises an exception. Device trigger timestamp
 reception is a separate API; this sending interface does not synthesize event times.
+
+Hardware event polling, exact source timestamps, queue contracts and verification: [Trigger support](docs/trigger.md).

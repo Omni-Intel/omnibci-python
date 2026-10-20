@@ -16,6 +16,7 @@ use std::{
 };
 type Result<T> = std::result::Result<T, Error>;
 const SAMPLE_CAPACITY: usize = 128;
+const TRIGGER_CAPACITY: usize = 16_384;
 #[derive(Clone)]
 enum Action {
     Start,
@@ -39,6 +40,7 @@ struct Core {
     previous: Option<u32>,
     index: u64,
     queue: VecDeque<Samples>,
+    triggers: VecDeque<omnibci_sdk::protocol::EegTrigger>,
     disconnected: bool,
     closing: bool,
     loff_may_be_on: bool,
@@ -62,6 +64,7 @@ impl Default for Core {
             previous: None,
             index: 0,
             queue: VecDeque::new(),
+            triggers: VecDeque::new(),
             disconnected: false,
             closing: false,
             loff_may_be_on: false,
@@ -163,6 +166,7 @@ impl Core {
             Event::Stm32Started(result) if matches!(self.pending, Some(Action::Start)) => {
                 result.map_err(Error::Transport)?;
                 self.queue.clear();
+                self.triggers.clear();
                 self.parser = Parser::default();
                 self.previous = None;
                 self.index = 0;
@@ -191,7 +195,10 @@ impl Core {
                 let config = self.config.as_ref().ok_or(Error::InvalidState)?;
                 let frames = self.parser.feed(&bytes, &config.gains);
                 self.parser.data_packets.clear();
-                self.parser.events.clear();
+                let events = std::mem::take(&mut self.parser.events);
+                let trigger_overflow = self.triggers.len() + events.len() > TRIGGER_CAPACITY;
+                let remaining = TRIGGER_CAPACITY.saturating_sub(self.triggers.len());
+                self.triggers.extend(events.into_iter().take(remaining));
                 if !frames.is_empty() {
                     if self.queue.len() == SAMPLE_CAPACITY {
                         return Err(Error::Overflow);
@@ -215,6 +222,9 @@ impl Core {
                         received_at: Instant::now(),
                         sample_rate_hz: 250,
                     });
+                }
+                if trigger_overflow {
+                    return Err(Error::Overflow);
                 }
             }
             Event::Stm32WireMetrics { crc_bad, .. } => self.crc = crc_bad,
@@ -425,6 +435,18 @@ impl Device {
     pub fn configure(&mut self, config: Configuration, timeout: Duration) -> Result<()> {
         config.validate().map_err(Error::InvalidConfig)?;
         self.request(Action::Configure(config), timeout)
+    }
+    /// Drain available hardware events independently of sample reads. Call regularly.
+    /// Retain the received prefix on a fault, then report the fault on the next call.
+    pub fn read_triggers(&self) -> Result<(u64, Vec<omnibci_sdk::protocol::EegTrigger>)> {
+        let mut core = self.shared.core.lock().map_err(|_| Error::WorkerPanicked)?;
+        if core.triggers.is_empty()
+            && let Some(error) = &core.error
+        {
+            return Err(error.clone());
+        }
+        let generation = core.generation;
+        Ok((generation, core.triggers.drain(..).collect()))
     }
     pub fn read(&self, timeout: Duration) -> Result<Samples> {
         let deadline = Instant::now() + timeout;
@@ -1187,5 +1209,72 @@ mod primary_cleanup_error_tests {
         assert!(before.elapsed() < Duration::from_millis(80));
         assert!(error.contains("SD close failed"), "{error}");
         assert!(error.contains("Timeout"), "{error}");
+    }
+}
+#[cfg(test)]
+mod trigger_queue_tests {
+    use super::*;
+    fn event_packet(code: u8, timestamp: u64) -> Vec<u8> {
+        let mut p = vec![0u8; 48];
+        p[..4].copy_from_slice(&[0xa5, 0x5a, 1, 2]);
+        p[8..16].copy_from_slice(&timestamp.to_le_bytes());
+        p[16] = code;
+        p[17] = 1;
+        p[18..22].copy_from_slice(&u32::MAX.to_le_bytes());
+        p[22..26].copy_from_slice(&1000u32.to_le_bytes());
+        let crc = omnibci_sdk::protocol::crc16_ccitt(&p[..46]);
+        p[46..].copy_from_slice(&crc.to_le_bytes());
+        p
+    }
+    fn core() -> Core {
+        Core {
+            state: State::Streaming,
+            config: Some(Configuration::default()),
+            generation: 3,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn fragmented_event_only_packets_preserve_repeats_zero_and_exact_time() {
+        let mut c = core();
+        let timestamp = (1u64 << 53) + 123;
+        let packets: Vec<u8> = [0, 7, 7, 255]
+            .into_iter()
+            .flat_map(|v| event_packet(v, timestamp))
+            .collect();
+        for chunk in packets.chunks(11) {
+            c.event(Event::Bytes(chunk.to_vec())).unwrap();
+        }
+        assert!(c.queue.is_empty());
+        assert_eq!(
+            c.triggers.iter().map(|e| e.code).collect::<Vec<_>>(),
+            [0, 7, 7, 255]
+        );
+        for e in &c.triggers {
+            assert_eq!(e.sequence, u32::MAX);
+            assert_eq!(e.timing.as_ref().unwrap().trigger_timestamp_us, timestamp);
+            assert_eq!(e.timing.as_ref().unwrap().anchor_timestamp_us, 1000);
+        }
+    }
+    #[test]
+    fn stop_preserves_tail_and_start_clears_old_generation() {
+        let mut c = core();
+        c.begin(Action::Stop).unwrap();
+        c.event(Event::Bytes(event_packet(7, 123))).unwrap();
+        c.event(Event::Stm32Stopped(Ok(()))).unwrap();
+        assert_eq!(c.triggers.len(), 1);
+        c.begin(Action::Start).unwrap();
+        assert_eq!(c.triggers.len(), 1);
+        c.event(Event::Stm32Started(Ok(()))).unwrap();
+        assert!(c.triggers.is_empty());
+        assert_eq!(c.generation, 4);
+    }
+    #[test]
+    fn overflow_reports_error_and_retains_prefix() {
+        let mut c = core();
+        let packets = event_packet(1, 123).repeat(TRIGGER_CAPACITY + 1);
+        assert_eq!(c.event(Event::Bytes(packets)).unwrap_err(), Error::Overflow);
+        assert_eq!(c.triggers.len(), TRIGGER_CAPACITY);
+        assert!(c.triggers.iter().all(|e| e.code == 1));
     }
 }

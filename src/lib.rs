@@ -234,6 +234,17 @@ impl NativeDevice {
     fn snapshot_json(&self, py: Python<'_>) -> PyResult<String> {
         self.with(py, |d| Ok(d.snapshot_json()))
     }
+    fn read_triggers_json(&self, py: Python<'_>) -> PyResult<String> {
+        self.with(py, |d| match d {
+            Backend::Stm32(device) => {
+                let (generation, events) = device.read_triggers()?;
+                Ok(triggers_json(generation, &events).to_string())
+            }
+            Backend::Esp32(_) => Err(Error::InvalidConfig(
+                "hardware trigger polling currently requires STM32".into(),
+            )),
+        })
+    }
     fn read<'py>(&self, py: Python<'py>, timeout: f64) -> PyResult<Bound<'py, PyDict>> {
         let timeout = duration(timeout)?;
         let samples = self.with(py, |d| d.read(timeout))?;
@@ -299,6 +310,18 @@ fn pack_samples<'py>(
     ] {
         output.set_item(key, PyBytes::new(py, &value))?;
     }
+    let timestamps: Vec<u8> = samples
+        .frames
+        .iter()
+        .flat_map(|f| f.source_timestamp_us.unwrap_or(0).to_le_bytes())
+        .collect();
+    let timestamp_valid: Vec<u8> = samples
+        .frames
+        .iter()
+        .map(|f| u8::from(f.source_timestamp_us.is_some()))
+        .collect();
+    output.set_item("source_timestamp_us", PyBytes::new(py, &timestamps))?;
+    output.set_item("source_timestamp_valid", PyBytes::new(py, &timestamp_valid))?;
     output.set_item("channel_count", width)?;
     output.set_item("status_width", status_width)?;
     output.set_item("generation", samples.generation)?;
@@ -379,6 +402,7 @@ fn decode_frames<'py>(
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeDevice>()?;
+    m.add_function(wrap_pyfunction!(decode_triggers_json, m)?)?;
     m.add_class::<trigger::NativeTriggerController>()?;
     m.add_function(wrap_pyfunction!(serial_ports, m)?)?;
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
@@ -464,4 +488,25 @@ mod config_tests {
         assert_eq!(value["stm32"]["protocol"], "EEG V3 · Control V1");
         assert!(value["e73"].is_null());
     }
+}
+
+fn triggers_json(
+    generation: u64,
+    events: &[omnibci_sdk::protocol::EegTrigger],
+) -> serde_json::Value {
+    serde_json::json!({"generation": generation, "events": events.iter().map(|event| {
+        serde_json::json!({"code":event.code,"sequence":event.sequence,
+            "source_timestamp_ms":event.source_timestamp_ms,
+            "timing":event.timing.as_ref().map(|timing| serde_json::json!({
+                "trigger_timestamp_us": timing.trigger_timestamp_us,
+                "anchor_timestamp_us":timing.anchor_timestamp_us
+            }))})
+    }).collect::<Vec<_>>()})
+}
+
+#[pyfunction]
+fn decode_triggers_json(data: Vec<u8>) -> String {
+    let mut parser = omnibci_sdk::stm32::Parser::default();
+    parser.feed(&data, &[24; 32]);
+    triggers_json(0, &parser.events).to_string()
 }

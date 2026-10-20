@@ -208,6 +208,18 @@ class SampleBatch:
     generation: int
     sample_rate_hz: int
     received_at: float
+    source_timestamp_us: NDArray[np.uint32] | None = None
+    source_timestamp_valid: NDArray[np.bool_] | None = None
+
+    def __post_init__(self):
+        n = len(self.sequence)
+        for name, dtype in (("source_timestamp_us", "<u4"), ("source_timestamp_valid", "?")):
+            value = getattr(self, name)
+            if value is None:
+                value = np.frombuffer(bytes(n * np.dtype(dtype).itemsize), dtype=dtype)
+                object.__setattr__(self, name, value)
+            if len(value) != n:
+                raise ValueError("source timestamp length does not match samples")
 
     def __len__(self) -> int:
         return len(self.sequence)
@@ -222,6 +234,8 @@ class SampleBatch:
             self.generation,
             self.sample_rate_hz,
             self.received_at,
+            self.source_timestamp_us[start:stop],
+            self.source_timestamp_valid[start:stop],
         )
 
     @classmethod
@@ -251,6 +265,8 @@ class SampleBatch:
             data["generation"],
             data["sample_rate_hz"],
             time.monotonic() - data["received_age_s"],
+            np.frombuffer(data.get("source_timestamp_us", bytes(n * 4)), dtype="<u4"),
+            np.frombuffer(data.get("source_timestamp_valid", bytes(n)), dtype="?"),
         )
 
 
@@ -287,7 +303,9 @@ def _combine(batches: list[SampleBatch]) -> SampleBatch | None:
             np.frombuffer(joined.tobytes(), dtype=joined.dtype).reshape(joined.shape)
         )
     return SampleBatch(
-        *arrays, first.generation, first.sample_rate_hz, batches[-1].received_at
+        *arrays, first.generation, first.sample_rate_hz, batches[-1].received_at,
+        np.frombuffer(np.concatenate([b.source_timestamp_us for b in batches]).tobytes(), dtype="<u4"),
+        np.frombuffer(np.concatenate([b.source_timestamp_valid for b in batches]).tobytes(), dtype="?"),
     )
 
 
@@ -428,6 +446,16 @@ class Board:
             self._device.start(_timeout(timeout))
             self._pending.clear()
 
+    def read_triggers(self) -> tuple[TriggerEvent, ...]:
+        """Drain currently available STM32 events independently of EEG reads.
+
+        Nonblocking. Call regularly; a 16384-event queue reports overflow.
+        Stop preserves queued events; a successful new start clears them.
+        """
+        with self._lock:
+            self._ensure_open()
+            return _trigger_events(json.loads(self._device.read_triggers_json()))
+
     def stop(self, *, timeout: float = 5.0) -> None:
         with self._lock:
             self._ensure_open()
@@ -533,3 +561,30 @@ def _device_type(value: str) -> str:
     if value not in ("esp32", "stm32"):
         raise ValueError("device_type must be esp32 or stm32")
     return value
+
+
+@dataclass(frozen=True)
+class TriggerTiming:
+    trigger_timestamp_us: int
+    anchor_timestamp_us: int
+
+
+@dataclass(frozen=True)
+class TriggerEvent:
+    generation: int
+    code: int
+    sequence: int
+    source_timestamp_ms: int | None
+    timing: TriggerTiming | None
+
+
+def _trigger_events(value: dict) -> tuple[TriggerEvent, ...]:
+    return tuple(TriggerEvent(value["generation"], e["code"], e["sequence"],
+                              e["source_timestamp_ms"],
+                              TriggerTiming(**e["timing"]) if e["timing"] is not None else None)
+                 for e in value["events"])
+
+
+def decode_triggers(data: bytes) -> tuple[TriggerEvent, ...]:
+    """Decode complete STM32 trigger packets offline; timestamps remain integers."""
+    return _trigger_events(json.loads(_native.decode_triggers_json(data)))
