@@ -8,13 +8,16 @@ STM32 32 导与 E73 BLE
 ``serial://PORT``；BLE 使用 E73 专用服务，不能套用 ESP32 的八导 BLE key。
 发现结果保留设备类型，可直接传给 ``Board.connect``。
 
+当前固件广播名为 ``OmniBCI-32CH``，SDK 也兼容旧名称 ``OmniBCI32-BLE``；
+选择实际发现的目标设备，不要只按广播名猜测身份。
+
 .. code-block:: python
 
    from omnibci import Board
 
    devices = Board.discover(transport="ble", device_type="stm32", timeout=10)
    if not devices:
-       raise RuntimeError("未发现 OmniBCI32-BLE")
+       raise RuntimeError("未发现 STM32/E73 BLE 设备")
    with Board.connect(devices[0], timeout=20) as board:
        assert board.get_config().verified
        board.start()
@@ -89,6 +92,10 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 固定长度读取发生异常时，已消费数据通过 ``error.partial`` 提供。
 新的连接是新的会话，不自动续接前一次采集。
 
+硬件事件使用 :py:meth:`omnibci.Board.read_triggers` 读取；采集中同时消费
+EEG 与事件队列。源时间、回绕、事件关联、32.2.4 时钟就绪条件及完整示例见
+:doc:`trigger`，不要用主机接收时间代替设备时间。
+
 验证范围
 --------
 
@@ -97,7 +104,7 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 本次 SDK 升级保持公开 Python API 与包版本 0.2.0 不变，只重新构建并运行离线测试，
 未重跑新 SDK 的实机采集；具体结果见 ``docs/development.rst``。旧 SDK
 ``aa9ab512ecf6243646fbbb23e9432e3c79eac1ec`` 下的 STM32 32.2.3 短时实机结果见
-``docs/trigger.md``，不能作为新固定提交的硬件证据。
+:doc:`trigger`，不能作为新固定提交的硬件证据。
 ``close()`` 返回不表示 Windows 已完成底层 BLE 资源清理；后续连接仍需等待 SDK
 清理门控。若系统清理持续阻塞，新连接会报告错误，可能需要重启 Python 进程。
 这不提供 Python 会话自动重连，也不代表 BLE ATT ACK 超时根因已经解决。

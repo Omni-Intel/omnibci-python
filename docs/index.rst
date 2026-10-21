@@ -13,6 +13,7 @@ OmniBCI Python SDK（包名 ``omnibci``）通过 Rust SDK 连接 ESP32-C3 + ADS1
    installation
    quickstart
    stm32
+   trigger
    configuration
    data-and-errors
 

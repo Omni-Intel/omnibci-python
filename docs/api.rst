@@ -9,7 +9,7 @@
 Board
 -----
 
-.. py:class:: Board(native_device)
+.. py:class:: Board(native_device, device_type="esp32")
 
    持有单个设备，用 :py:meth:`connect` 创建。支持 ``with``，退出时关闭设备。
 
@@ -71,6 +71,17 @@ Board
    .. py:method:: close(*, timeout: float = 6.0) -> None
 
       显式关闭设备并清除 Python 待读缓存。成功关闭后重复调用直接返回。
+
+   .. py:method:: read_triggers() -> tuple[TriggerEvent, ...]
+
+      取走当前已排队的 STM32 硬件事件，不等待新事件；没有事件时返回空元组。
+      与 EEG 队列独立，应在采集中定期轮询。事件可能晚于锚点样本到达，需按
+      generation 和 sequence 关联，见 :doc:`trigger`。
+
+      事件队列容量为 16,384；溢出使采集故障，已保留事件仍可排空，之后的空事件
+      读取报告 :py:exc:`BufferOverflowError`。STOP 保留尾事件，成功 START
+      清空上一代事件。ESP32 调用报告 :py:exc:`ConfigurationError`。
+      本方法仍需等待同一 Board 的操作锁，“不等待”不代表可抢占正在进行的 read。
 
    .. py:method:: __enter__() -> Board
 
@@ -241,10 +252,11 @@ Stm32Config
 SampleBatch
 -----------
 
-.. py:class:: SampleBatch(eeg_uv, raw_counts, sequence, valid, sample_indices, status, mode, generation, sample_rate_hz, received_at)
+.. py:class:: SampleBatch(eeg_uv, raw_counts, sequence, valid, sample_indices, status, mode, generation, sample_rate_hz, received_at, source_timestamp_us=None, source_timestamp_valid=None)
 
    批次数据类，通常由 :py:meth:`Board.read` 或 :py:func:`decode_frames` 返回。
-   字段不可重新赋值；SDK 返回的数组只读。手工构造时不会自动冻结或验证传入数组。
+   字段不可重新赋值；SDK 返回的数组只读。手工构造不会冻结或校验其他数组的类型
+   和形状；两个源时间数组校验长度，省略时生成等长零值和全 False 掩码。
 
    .. py:attribute:: eeg_uv
       :type: NDArray
@@ -301,9 +313,73 @@ SampleBatch
 
       float64，形状 ``(N,)``，由样本索引除以采样率计算的相对时间。
 
+   .. py:attribute:: source_timestamp_us
+      :type: NDArray
+
+      uint32，形状 ``(N,)``，STM32 DRDY 设备微秒时间的低 32 位；不可用时为 0。
+      必须结合 source_timestamp_valid 判断，0 可以是有效回绕值。
+      相邻差值按模 ``2^32`` 计算；不是主机时钟或 UTC。ESP32 当前不提供该时间。
+
+   .. py:attribute:: source_timestamp_valid
+      :type: NDArray
+
+      bool，形状 ``(N,)``，标记对应源时间是否可用；ESP32 当前全为 False。
+      由 SDK 返回时，两个源时间数组与其他样本数组一样只读，并随合批、切片保留。
+
    .. py:method:: __len__() -> int
 
       支持 ``len(batch)``，返回样本数。
+
+TriggerTiming
+-------------
+
+.. py:class:: TriggerTiming(trigger_timestamp_us, anchor_timestamp_us)
+
+   不可变数据类。Python 整数保留设备时间的全部位数，字段单位均为微秒。
+
+   .. py:attribute:: trigger_timestamp_us
+      :type: int
+
+      触发包起始位 ISR 的 uint64 设备时间，不是主机发送、到达或刺激呈现时间。
+
+   .. py:attribute:: anchor_timestamp_us
+      :type: int
+
+      首个不早于触发起始时刻的实际 EEG DRDY 时间低 32 位（uint32）。
+      与触发时间低 32 位做回绕运算，不能直接把 64 位触发值减去截断锚点。
+
+TriggerEvent
+------------
+
+.. py:class:: TriggerEvent(generation, code, sequence, source_timestamp_ms, timing)
+
+   STM32 硬件事件，不可变数据类，由 :py:meth:`Board.read_triggers` 或
+   :py:func:`decode_triggers` 返回。构造参数均必填，可选字段显式传 None。
+
+   .. py:attribute:: generation
+      :type: int
+
+      uint64 采集代数；离线解码为 0，不代表现场实时会话。
+
+   .. py:attribute:: code
+      :type: int
+
+      保留协议的 uint16 事件码；当前外部串口发送协议使用 0～255，含 0 和重复码。
+
+   .. py:attribute:: sequence
+      :type: int
+
+      锚点 EEG 样本的 uint32 序号；一个锚点可关联多个事件。
+
+   .. py:attribute:: source_timestamp_ms
+      :type: int | None
+
+      兼容旧接口的毫秒设备时间低 32 位；不可用时为 None。
+
+   .. py:attribute:: timing
+      :type: TriggerTiming | None
+
+      微秒触发时间及 DRDY 锚点；不可用时为 None。不要从主机收包时间伪造。
 
 Snapshot
 --------
@@ -323,7 +399,7 @@ Snapshot
       设备信息。
 
    .. py:attribute:: config
-      :type: FrontendConfig | None
+      :type: FrontendConfig | Stm32Config | None
 
       已确认的前端配置。
 
@@ -370,6 +446,55 @@ Snapshot
 
    跳过 CRC 错误帧，丢弃末尾不完整帧。
    参数类型错误或配置无效会抛出 TypeError / ValueError。
+
+.. py:function:: decode_triggers(data: bytes) -> tuple[TriggerEvent, ...]
+
+   离线解码完整 STM32 原始协议缓冲区中的硬件事件，不访问设备。
+   每次创建独立解析器；CRC 错误包与末尾不完整包不返回，半包不跨调用保留。
+   返回 generation 为 0 的事件，源时间保持整数精度；不能直接输入 BLE 通知信封。
+
+触发发送
+--------
+
+.. py:class:: TriggerController(port: str, *, timeout: float = 1.0)
+
+   持有外部发送板的串口，使用 10000 baud、8N1、无流控和三字节二进制协议。
+   可直接构造或用 :py:meth:`TriggerController.connect` 创建，支持 with。
+   端口或 timeout 参数无效（包括类型非法）时报告 ValueError；底层 I/O
+   失败报告 :py:exc:`TransportError`。不提供设备接收确认或实时调度保证。
+
+   .. py:classmethod:: connect(port: str, *, timeout: float = 1.0) -> TriggerController
+
+      打开实际发送板串口，如 COM23；它与采集板 Data CDC/DFU 端口不同。
+      timeout 是有限秒数，范围 ``(0, 60]``，不接受 bool；用于串口 I/O。
+
+   .. py:staticmethod:: available_ports() -> list[str]
+
+      枚举串口候选，不验证哪个属于发送板。枚举失败报告 TransportError。
+
+   .. py:property:: is_open
+      :type: bool
+
+      是否仍持有打开的串口，不表示设备在线或收到事件。
+
+   .. py:method:: send(code: int) -> None
+
+      code 必须是 Python int 且在 0～255 内；拒绝 bool 等类型及越界值，报告
+      ValueError。发送成功只确认主机写入/flush。关闭后发送、写入或 flush
+      失败报告 TransportError；I/O 失败后底层串口关闭，重试需重新连接。
+
+   .. py:method:: close() -> None
+
+      释放串口，可重复调用。正常 I/O 清理由 SDK 执行，内部锁故障仍可报告
+      TransportError。
+
+   .. py:method:: __enter__() -> TriggerController
+
+      返回自身，不重新打开已关闭的控制器。
+
+   .. py:method:: __exit__(exc_type, exc_value, traceback) -> None
+
+      调用 close，不抑制实验异常；与 Board 的退出实现不同，未附加清理错误 note。
 
 异常
 ----

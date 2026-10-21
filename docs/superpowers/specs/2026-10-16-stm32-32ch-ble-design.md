@@ -1,5 +1,7 @@
 # Python wheel：32 导 E73 BLE 适配方案
 
+> 历史设计记录：本文保留当时的工作分支、SDK 基线与讨论，当前安装和设备能力见 [README](../../../README.md)，接口契约见 [API 参考](../../api.rst)。
+
 ## 目标与工作分支
 
 在 omnibci-python 的 `32ch` 分支增加 STM32 32 导支持，优先支持用户现有 GUI/firmware 的 E73 BLE 直连版本。沿用 omnibci 包名、Python >=3.11 和 ABI3 wheel；保持现有 ESP32 8 导 API 兼容。沿用仓库六平台 wheel 构建范围，本机先验证 Windows x64。用户最后一句 wheel 要求未完整发出，如补充要求，以其为准。

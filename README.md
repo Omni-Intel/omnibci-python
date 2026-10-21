@@ -9,7 +9,7 @@ from omnibci import Board
 
 devices = Board.discover(transport="ble", device_type="stm32", timeout=10)
 if not devices:
-    raise RuntimeError("未发现 OmniBCI32-BLE")
+    raise RuntimeError("未发现 STM32/E73 BLE 设备")
 # 多台设备时，请按设备标识选择目标；这里以第一台为例。
 with Board.connect(devices[0], timeout=20) as board:
     print(board.get_config())
@@ -20,7 +20,7 @@ with Board.connect(devices[0], timeout=20) as board:
 ```
 
 板端 USB CDC 使用 `Board.connect("serial://COM5", device_type="stm32")`。
-原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务；要求实际 TX/RX 2M、MTU ≥153、E73 SPI 桥接固件，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
+原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务，当前广播名为 `OmniBCI-32CH`，SDK 也兼容旧名称 `OmniBCI32-BLE`；以实际发现结果为准。要求实际 TX/RX 2M、MTU ≥153、E73 SPI 桥接固件，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
 
 当前 STM32 固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle 和双模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
@@ -112,17 +112,21 @@ with Board.connect("serial://COM5") as board:
 
 | `SampleBatch` 字段 | 类型 / 含义 |
 | --- | --- |
-| `eeg_uv` | float32，`(N, 8)`，按每通道增益换算的微伏 |
-| `raw_counts` | int32，`(N, 8)`，ADS1299 有符号 24 位原始值 |
+| `eeg_uv` | float32，`(N, C)`，按每通道增益换算的微伏 |
+| `raw_counts` | int32，`(N, C)`，ADS1299 有符号 24 位原始值 |
 | `sequence` | uint32，`(N,)`，设备序号 |
 | `valid` | bool，`(N,)`，固件有效标志；不会自动剔除无效行 |
 | `sample_indices` | uint64，`(N,)`，本次采集内的序号时间轴，丢包留下间隔 |
-| `status` | uint8，`(N, 3)`，ADS 状态字节 |
+| `status` | uint8，`(N, S)`，ADS 状态字节 |
+| `source_timestamp_us` | uint32，`(N,)`，STM32 DRDY 设备微秒时间低 32 位 |
+| `source_timestamp_valid` | bool，`(N,)`，源时间是否可用；ESP32 当前全为 false |
 | `mode` | uint8，`(N,)`，固件模式编号 |
 | `generation` | 每次成功开始采集后的会话代数 |
 | `sample_rate_hz` | 250 |
 | `sample_time_s` | 由 sample_indices / sample_rate_hz 计算的相对时间 |
 | `received_at` | 主机 `time.monotonic()` 时间轴上的近似 SDK 交付时间；合批时取最后一批，非硬件采样时间 |
+
+表中 C 为 8（ESP32）或 32（STM32），S 为 3 或 12。源时间不可用时值为 0、掩码为 false；0 配合 true 是合法回绕值，相邻差值按模 `2^32` 计算。STM32 硬件事件通过 `board.read_triggers()` 独立读取，不能只读 EEG 而忽略事件队列，见[触发指南](docs/trigger.rst)。
 
 `stop()` 保留已接收但尚未读取的尾部样本；新的 `start()` 清空上一次采集缓存。Rust 队列有界（128 批），消费过慢导致溢出时会报告故障，不静默覆盖旧数据。
 
@@ -188,4 +192,4 @@ close the underlying port. Repeated codes and code zero are valid. Context exit 
 the port, including when the experiment raises an exception. Device trigger timestamp
 reception is a separate API; this sending interface does not synthesize event times.
 
-Hardware event polling, exact source timestamps, queue contracts and verification: [Trigger support](docs/trigger.md).
+硬件事件读取、设备源时间、双队列示例及验证范围见[触发指南](docs/trigger.rst)。

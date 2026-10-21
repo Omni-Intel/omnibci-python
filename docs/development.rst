@@ -38,7 +38,7 @@ SDK 升级验证
 并通过 66 个 Python 测试（排除硬件测试）。``cargo fmt --check`` 与
 ``cargo clippy --locked -- -D warnings`` 通过。
 未使用新 SDK 重跑实机测试；旧 SDK 基线下的 STM32 32.2.3 结果见
-``docs/trigger.md``，不能作为新固定提交的硬件证据。
+:doc:`trigger`，不能作为新固定提交的硬件证据。
 
 源码与发布
 ----------
@@ -57,3 +57,8 @@ SDK 子模块必须固定到可从远端获取的提交；只在本机存在的�
 
 ``conf.py`` 从 ``pyproject.toml`` 读取版本。API 文档与类型声明需同步公开接口；
 Sphinx 只验证文档语法和交叉引用，不替代采集测试。
+
+新增公共方法、数据类字段或导出项时，同步 ``api.rst``、专题页与示例；尤其核对
+``python/omnibci/__init__.py`` 的导出、实际 Python 签名和 ``_native.pyi``。
+本项目使用原生 RST；新增页面必须加入 ``index.rst`` 的 toctree。
+``trigger.md`` 仅保留旧链接入口，正文在 :doc:`trigger`，不应在两处维护副本。
