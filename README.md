@@ -1,6 +1,6 @@
 # OmniBCI Python
 
-独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + E73 的 32 导 USB、ESB Dongle 和 BLE 直连，均为 250 Hz。`dev/32ch` 分支增加的 STM32 路径复用配套 GUI 的 Rust 驱动。
+独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + ADS1299 32 导的板端 USB CDC 与 E73 BLE 直连，均为 250 Hz。`dev/32ch` 分支增加的 STM32 路径使用 Rust SDK 的 STM32 驱动。
 
 ## STM32 32 导 BLE
 
@@ -19,12 +19,12 @@ with Board.connect(devices[0], timeout=20) as board:
     board.stop()
 ```
 
-板端 USB／ESB Dongle 使用 `Board.connect("serial://COM5", device_type="stm32")`。
-原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务；要求实际 TX/RX 2M、MTU ≥153、SPI 桥接或处于 BLE 模式的双模镜像，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
+板端 USB CDC 使用 `Board.connect("serial://COM5", device_type="stm32")`。
+原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务；要求实际 TX/RX 2M、MTU ≥153、E73 SPI 桥接固件，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
 
-这版连接当前无线模式，不提供 BLE／dongle 模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
+当前 STM32 固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle 和双模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
-SDK 固定到 `omnibci-sdk` 的 `master` 分支提交 `aa9ab512ecf6243646fbbb23e9432e3c79eac1ec`。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
+SDK 固定到 `omnibci-sdk` 的 `master` 分支提交 `e1f25b3a6d272e5040929c53b331d45738ff6d73`。本次升级保持公开 Python API 与包版本 0.2.0 不变，只完成离线构建和测试，未重跑新 SDK 的实机测试；验证范围见 [`docs/development.rst`](docs/development.rst)。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
 
 ## 安装
 
@@ -174,7 +174,7 @@ uv run --no-sync maturin sdist --out dist
 
 ## Serial trigger dispatch
 
-`TriggerController` uses the shared Rust SDK (`trigger-controller` feature):
+`TriggerController` uses the shared Rust SDK (`trigger` feature):
 
 ```python
 from omnibci import TriggerController

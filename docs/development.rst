@@ -30,6 +30,16 @@
 ``uv sync --locked --all-extras --no-install-project``，待工具依赖安装完成后再执行
 完整的 ``uv sync --locked --all-extras``。两步使用同一锁文件和项目环境。
 
+SDK 升级验证
+------------
+
+本次只更新 SDK 固定提交并重新构建，公开 Python API 与包版本 0.2.0 不变，未连接硬件。
+``cargo test --locked`` 的 22 个原生 Rust 测试通过；release abi3 扩展重新构建成功，
+并通过 66 个 Python 测试（排除硬件测试）。``cargo fmt --check`` 与
+``cargo clippy --locked -- -D warnings`` 通过。
+未使用新 SDK 重跑实机测试；旧 SDK 基线下的 STM32 32.2.3 结果见
+``docs/trigger.md``，不能作为新固定提交的硬件证据。
+
 源码与发布
 ----------
 

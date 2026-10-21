@@ -4,7 +4,7 @@ STM32 32 导与 E73 BLE
 连接与固件
 ----------
 
-``device_type="stm32"`` 选择 32 导后端。USB 直连和 ESB dongle 使用
+``device_type="stm32"`` 选择 32 导后端。板端 USB CDC 使用
 ``serial://PORT``；BLE 使用 E73 专用服务，不能套用 ESP32 的八导 BLE key。
 发现结果保留设备类型，可直接传给 ``Board.connect``。
 
@@ -28,9 +28,10 @@ STM32 32 导与 E73 BLE
 串口连接示例为 ``Board.connect("serial://COM5", device_type="stm32")``，
 Linux/macOS 应使用系统提供的串口路径。
 
-要求 E73 SPI 桥接镜像，或已处于 BLE 模式的双模镜像；实际 TX/RX 均为 2M，
-MTU 至少 153。自检镜像不能完成 STM32 配置。STM32 必须支持 32.0.5 系列的
-AE/BE 完整配置事务，32.0.4 不兼容此路径。第一版不提供无线模式切换和自动重连。
+要求 E73 SPI 桥接固件；实际 TX/RX 均为 2M，MTU 至少 153。链路自检镜像不能
+完成 STM32 配置。STM32 必须支持 32.0.5 系列的 AE/BE 完整配置事务，32.0.4
+不兼容此路径。当前固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle
+和双模式切换；本绑定不自动重连。
 
 ``board.info.stm32`` 与 ``board.info.e73`` 分别给出各组件独立报告的版本、Git
 revision、dirty、状态和协议；``state`` 为 ``available``、``unsupported``、
@@ -92,8 +93,11 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 --------
 
 本分支固定到 ``omnibci-sdk`` 的 ``master`` 分支提交
-``aa9ab512ecf6243646fbbb23e9432e3c79eac1ec``，与更新后的 GUI 使用同一 SDK 基线。
-该基线提供 STM32/E73 组件固件信息，并保留 Windows BLE 后台清理和新连接保护修复。
+``e1f25b3a6d272e5040929c53b331d45738ff6d73``。该基线提供 STM32/E73 组件固件信息。
+本次 SDK 升级保持公开 Python API 与包版本 0.2.0 不变，只重新构建并运行离线测试，
+未重跑新 SDK 的实机采集；具体结果见 ``docs/development.rst``。旧 SDK
+``aa9ab512ecf6243646fbbb23e9432e3c79eac1ec`` 下的 STM32 32.2.3 短时实机结果见
+``docs/trigger.md``，不能作为新固定提交的硬件证据。
 ``close()`` 返回不表示 Windows 已完成底层 BLE 资源清理；后续连接仍需等待 SDK
 清理门控。若系统清理持续阻塞，新连接会报告错误，可能需要重启 Python 进程。
 这不提供 Python 会话自动重连，也不代表 BLE ATT ACK 超时根因已经解决。
