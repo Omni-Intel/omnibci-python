@@ -13,6 +13,11 @@
 安装 wheel
 ----------
 
+阻抗接口需使用 ``dev/8ch`` 的开发 wheel 或本分支源码。既有 ``v0.1.2``
+Release 不包含该接口；开发包版本仍为 0.1.2，不能仅凭文件名区分。
+运行 ``python -c "import omnibci; print(omnibci.SDK_REVISION)"`` 应输出
+``dab77683cec6c60fab8244648acb1b5f4514cf09``。
+
 从 `GitHub Releases <https://github.com/Omni-Intel/omnibci-python/releases>`_
 下载匹配操作系统、CPU 架构和 Python 的 wheel。以下为 Windows x86-64 示例，
 将路径替换为下载文件：
@@ -30,9 +35,8 @@ Build Tools；Linux 需要 pkg-config、libudev-dev 和 libdbus-1-dev。
 
 .. code-block:: console
 
-   git clone --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
+   git clone --branch dev/8ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
    cd omnibci-python
-   git switch master
    python -m venv .venv
 
 激活虚拟环境后执行：

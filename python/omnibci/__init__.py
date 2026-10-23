@@ -1,11 +1,12 @@
 """Direct OmniBCI acquisition backed by the Rust SDK."""
 
-from . import _native
+from . import _native, impedance
 from .api import (
     Board,
     DeviceInfo,
     DeviceMetadata,
     FrontendConfig,
+    ImpedanceResult,
     PartialReadError,
     SampleBatch,
     Snapshot,
@@ -27,10 +28,12 @@ __all__ = [
     "DeviceInfo",
     "DeviceMetadata",
     "FrontendConfig",
+    "ImpedanceResult",
     "SampleBatch",
     "Snapshot",
     "PartialReadError",
     "decode_frames",
+    "impedance",
     "OmniBCIError",
     "DeviceTimeoutError",
     "InvalidStateError",

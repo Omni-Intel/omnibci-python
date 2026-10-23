@@ -7,7 +7,7 @@ use pyo3::{
     create_exception,
     exceptions::PyValueError,
     prelude::*,
-    types::{PyBytes, PyDict},
+    types::{PyBytes, PyDict, PyInt},
 };
 use serde::Deserialize;
 use std::{
@@ -122,6 +122,17 @@ impl NativeDevice {
         let config: Config = serde_json::from_str(config_json)
             .map_err(|e| ConfigurationError::new_err(e.to_string()))?;
         self.with(py, |d| d.configure(config.into(), timeout))
+    }
+    /// Enable or disable LOFF; success requires a fresh SDK readback confirmation.
+    fn set_lead_off(&self, py: Python<'_>, mask: &Bound<'_, PyAny>, timeout: f64) -> PyResult<()> {
+        if !mask.is_exact_instance_of::<PyInt>() {
+            return Err(PyValueError::new_err("mask must be an integer in [0, 255]"));
+        }
+        let mask = mask
+            .extract::<u8>()
+            .map_err(|_| PyValueError::new_err("mask must be an integer in [0, 255]"))?;
+        let timeout = duration(timeout)?;
+        self.with(py, |d| d.set_lead_off(mask, timeout))
     }
     fn snapshot_json(&self, py: Python<'_>) -> PyResult<String> {
         let s = self.with(py, |d| Ok(d.snapshot()))?;
@@ -254,7 +265,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "86539ffdb70a78a6346c23f17e1b3637dc10cfa4")?;
+    m.add("SDK_REVISION", "dab77683cec6c60fab8244648acb1b5f4514cf09")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",

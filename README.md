@@ -1,6 +1,8 @@
 # OmniBCI Python
 
-独立 Rust SDK 的 Python 接口。通过 USB 串口或 BLE 连接 OmniBCI ESP32 + ADS1299 板子，配置前端并采集 8 通道、250 Hz EEG。
+独立 Rust SDK 的 Python 接口。通过 USB 串口或 BLE 连接 OmniBCI ESP32 + ADS1299 板子，配置前端、采集 8 通道、250 Hz EEG 并测量电极阻抗。
+
+阻抗接口位于 `dev/8ch` 开发分支；既有 `v0.1.2` Release 不包含此功能。请使用本分支构建的 wheel 或源码安装。包版本暂保持 0.1.2，SDK 固定到 `dab77683cec6c60fab8244648acb1b5f4514cf09`，可通过 `omnibci.SDK_REVISION` 核对安装基线。
 
 ## 安装
 
@@ -79,6 +81,26 @@ with Board.connect("serial://COM5") as board:
 | `srb2_mask` | SRB2 通道选择，必须是已启用通道的子集；SRB1 模式下可保留非零选择，实际开关由参考模式控制 |
 | `gains` | 8 个增益，允许 1、2、4、6、8、12、24 |
 | `verified` | SDK 返回的硬件配置确认标记，发送配置时忽略此字段 |
+
+## 阻抗测量
+
+```python
+from omnibci import Board
+
+with Board.connect("serial://COM5") as board:
+    result = board.measure_impedance()  # 默认测量全部已启用通道
+    print(result.mask, result.series_kohm, result.values_kohm)
+    print("削顶通道:", result.clipped_mask)
+    # 测量后采集保持停止；需要继续时显式调用 board.start()
+```
+
+`measure_impedance(mask=..., series_kohm=..., timeout=15)` 使用 31.25 Hz
+LOFF 激励读取四秒窗口，返回 8 个通道的 kOhm 值。串联补偿默认 SRB1 为
+9.98 kOhm、SRB2 为 4.40 kOhm。未选中、全量程削顶或有效样本不足一秒的
+通道为 `None`。模式必须是 `both_bias`、`eeg` 或 `no_bias`，且配置已确认。
+失败时 Board 会停止采集、关闭 LOFF 并恢复原配置；恢复未确认时会关闭会话，
+并在异常上附加说明。详见 [`docs/impedance.rst`](docs/impedance.rst) 和
+[`examples/impedance.py`](examples/impedance.py)。
 
 ## 数据与读取语义
 

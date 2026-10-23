@@ -6,7 +6,7 @@
 Python 辅助接口
 ---------------
 
-位于 ``python/omnibci/api.py``：
+位于 ``python/omnibci/api.py``；阻抗估计算法位于 ``python/omnibci/impedance.py``：
 
 .. list-table::
    :header-rows: 1
@@ -34,6 +34,14 @@ Python 辅助接口
      - 类方法，将原生 bytes 缓冲区转换为 NumPy 数组。
    * - ``PartialReadError.__init__(partial: SampleBatch | None)``
      - 保存部分结果并生成异常消息。
+   * - ``Board.measure_impedance(...) -> ImpedanceResult``
+     - 在 Board 锁内完成停止、LOFF 测量、恢复与结果计算。
+   * - ``Board._collect_impedance_window(timeout) -> SampleBatch``
+     - 读取四秒样本序号窗口，丢弃两秒未送达的批次。
+   * - ``Board._cleanup_impedance(original, primary, excitation_started) -> None``
+     - 尽力停止、关闭 LOFF、恢复配置；未确认时附加 note 并关闭会话。
+   * - ``impedance.estimate_impedance_kohm(...)``
+     - 31.25 Hz 最小二乘拟合、串联补偿与削顶判定。
 
 原生扩展
 --------
@@ -51,12 +59,16 @@ Python 辅助接口
        def stop(self, timeout: float) -> None: ...
        def close(self, timeout: float) -> None: ...
        def configure(self, config_json: str, timeout: float) -> None: ...
+       def set_lead_off(self, mask: int, timeout: float) -> None: ...
        def snapshot_json(self) -> str: ...
        def read(self, timeout: float) -> dict[str, Any]: ...
 
    def serial_ports() -> list[str]: ...
    def discover_ble_json(timeout: float) -> str: ...
    def decode_frames(data: bytes, gains: tuple[int, ...]) -> dict[str, Any]: ...
+
+``set_lead_off`` 只接受 0–255 的 Python 整数掩码，拒绝布尔值和其他类型；
+SDK 错误按既有异常类型映射。成功返回前，SDK 已确认新的 ``0xA9`` 回读。
 
 除 ``PartialReadError`` 在 Python 层定义外，公开异常均由原生扩展定义并重新导出。
 原生扩展同时提供 ``SDK_VERSION`` 和 ``SDK_REVISION``。

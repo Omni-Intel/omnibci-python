@@ -2,7 +2,7 @@
 =============
 
 .. py:module:: omnibci
-   :synopsis: OmniBCI 设备发现、配置与 EEG 采集。
+   :synopsis: OmniBCI 设备发现、配置、EEG 采集与阻抗测量。
 
 公开接口均从 ``omnibci`` 导入。
 
@@ -61,6 +61,22 @@ Board
       :raises PartialReadError: 读取超时，``partial`` 提供已消费的样本或 None。
       :raises OmniBCIError: 设备故障；原生读取抛出的设备异常携带部分结果。
       :raises ValueError: 样本数或 timeout 无效。
+
+   .. py:method:: measure_impedance(*, mask: int | None = None, series_kohm: float | None = None, timeout: float = 15.0) -> ImpedanceResult
+
+      测量 8 通道电极阻抗，结束后板子保持停止状态。事务在 Board 锁内完成：
+      保存并校验当前配置、停止采集、关闭 BIAS、启用 31.25 Hz LOFF、读取
+      四秒窗口、停止采集、关闭 LOFF、恢复并校验原配置。失败时尽力清理；
+      原配置或 LOFF 关闭未确认时关闭会话并在异常上附加 note。
+
+      :param mask: 0–255 的通道掩码，与已启用通道求交集；默认全部已启用通道。
+      :param series_kohm: 串联补偿值，范围 ``[0, 1000]``；默认 SRB1 为
+         9.98 kOhm，SRB2 为 4.40 kOhm。
+      :param timeout: 四秒窗口的读取超时，范围 ``(0, 60]`` 秒。
+      :raises ConfigurationError: 模式为 ``shorted`` 或 ``test``，或配置恢复失败。
+      :raises InvalidStateError: 配置未确认或停止未确认。
+      :raises ValueError: 参数无效，或掩码未选中任何已启用通道。
+      :raises OmniBCIError: 采集、读取或 LOFF 操作失败。
 
    .. py:method:: iter_batches(samples: int | None = None, *, timeout: float = 2.0) -> Iterator[SampleBatch]
 
@@ -300,6 +316,68 @@ Snapshot
       :type: str | None
 
       错误描述，没有错误时为 None。
+
+ImpedanceResult
+---------------
+
+.. py:class:: ImpedanceResult(mask, series_kohm, values_kohm, clipped_mask)
+
+   一次 8 通道阻抗测量的不可变结果。
+
+   .. py:attribute:: mask
+      :type: int
+
+      实际测量的通道掩码，已与已启用通道求交集。
+
+   .. py:attribute:: series_kohm
+      :type: float
+
+      本次使用的串联补偿值。
+
+   .. py:attribute:: values_kohm
+      :type: tuple[float | None, ...]
+
+      长度固定为 8，单位 kOhm。未选中、削顶或有效样本不足的通道为 None。
+
+   .. py:attribute:: clipped_mask
+      :type: int
+
+      窗口内出现全量程 ADC 码的通道掩码，只包含 ``mask`` 内的通道。
+
+阻抗估计模块
+------------
+
+.. py:currentmodule:: omnibci.impedance
+
+与 GUI 一致的 31.25 Hz 载波估计算法。设备控制由
+:py:meth:`omnibci.Board.measure_impedance` 负责。
+
+   .. py:data:: LEAD_OFF_FREQUENCY_HZ
+      :type: float
+
+      LOFF 激励频率，31.25 Hz。
+
+   .. py:data:: LEAD_OFF_FUNDAMENTAL_NA
+      :type: float
+
+      ±6 nA 交替激励的基波峰值 ``4 * 6 / pi`` nA。
+
+   .. py:data:: LEAD_OFF_SERIES_SRB1_KOHM
+      :type: float
+
+      SRB1 默认串联补偿值 9.98 kOhm。
+
+   .. py:data:: LEAD_OFF_SERIES_SRB2_KOHM
+      :type: float
+
+      SRB2 默认串联补偿值 4.40 kOhm。
+
+   .. py:function:: estimate_impedance_kohm(eeg_uv, raw_counts, sequence, valid, *, mask, series_kohm=9.98, sample_rate_hz) -> tuple[tuple[float | None, ...], int]
+
+      对二维窗口数组执行最小二乘拟合并返回各通道 kOhm 与削顶掩码。
+      ``sequence`` 提供相位参考；只拟合 ``mask`` 内且未削顶的通道。
+
+.. py:currentmodule:: omnibci
 
 离线函数
 --------

@@ -5,15 +5,19 @@ import math
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterator, Literal
 
 import numpy as np
 from numpy.typing import NDArray
 
-from . import _native
+from . import _native, impedance
 
 _MODES = ("both_bias", "eeg", "no_bias", "shorted", "test")
+_IMPEDANCE_MODES = ("both_bias", "eeg", "no_bias")
+# The GUI clears its impedance ring after this delivery outage.
+_IMPEDANCE_DATA_TIMEOUT_S = 2.0
+_LEAD_OFF_TIMEOUT_S = 3.0
 
 
 def _timeout(value: float) -> float:
@@ -197,6 +201,21 @@ class Snapshot:
     error: str | None
 
 
+@dataclass(frozen=True)
+class ImpedanceResult:
+    """One 8-channel ESP32 lead-off measurement.
+
+    ``values_kohm`` always has 8 entries. Channels outside ``mask``, channels
+    rejected by full-scale clipping and channels without enough finite valid
+    samples stay None. ``clipped_mask`` is restricted to ``mask``.
+    """
+
+    mask: int
+    series_kohm: float
+    values_kohm: tuple[float | None, ...]
+    clipped_mask: int
+
+
 class PartialReadError(_native.DeviceTimeoutError):
     """A fixed-size read timed out; partial contains the samples already consumed."""
 
@@ -332,6 +351,269 @@ class Board:
                     combined = _combine(parts)
                     assert combined is not None
                     return combined
+
+    def measure_impedance(
+        self,
+        *,
+        mask: int | None = None,
+        series_kohm: float | None = None,
+        timeout: float = 15.0,
+    ) -> ImpedanceResult:
+        """Measure ESP32 electrode impedance, then leave acquisition stopped.
+
+        The whole transaction holds the Board lock: confirm the current
+        configuration, stop streaming, disable BIAS feedback and enable 31.25 Hz
+        lead-off on the selected enabled channels, read a four-second window,
+        stop, disable lead-off, and restore the original configuration. The
+        board stays ready; call start() to resume EEG.
+
+        ``mask`` is an 8-bit channel mask, intersected with the enabled
+        channels; it defaults to every enabled channel. ``series_kohm``
+        defaults to 9.98 kOhm for SRB1 and 4.40 kOhm for SRB2. ``timeout``
+        bounds collection of the window. If cleanup cannot confirm LOFF off
+        or the restored configuration, the exception carries a note and the
+        Board is closed.
+        """
+        timeout = _timeout(timeout)
+        if mask is not None and (type(mask) is not int or not 0 <= mask <= 0xFF):
+            raise ValueError("mask must be an integer in [0, 255]")
+        if series_kohm is not None and (
+            isinstance(series_kohm, bool)
+            or not isinstance(series_kohm, (int, float))
+            or not math.isfinite(series_kohm)
+            or not 0.0 <= series_kohm <= 1000.0
+        ):
+            raise ValueError("series_kohm must be finite and within [0, 1000]")
+
+        with self._lock:
+            self._ensure_open()
+            original = self.get_config()
+            if not isinstance(original, FrontendConfig) or not original.verified:
+                raise _native.InvalidStateError(
+                    "frontend configuration has not been confirmed"
+                )
+            if original.mode not in _IMPEDANCE_MODES:
+                raise _native.ConfigurationError(
+                    "impedance requires both_bias, eeg or no_bias mode"
+                )
+            effective_mask = (
+                original.enabled_mask if mask is None else mask
+            ) & original.enabled_mask
+            if effective_mask == 0:
+                raise ValueError("mask must select at least one enabled channel")
+            if series_kohm is None:
+                series_kohm = (
+                    impedance.LEAD_OFF_SERIES_SRB2_KOHM
+                    if original.reference == "srb2"
+                    else impedance.LEAD_OFF_SERIES_SRB1_KOHM
+                )
+            else:
+                series_kohm = float(series_kohm)
+            measurement = replace(original, bias_mask=0)
+
+            excitation_started = False
+            try:
+                self._stop_before_impedance()
+                self._pending.clear()
+                excitation_started = True
+                self.configure(measurement)
+                if self.get_config() != measurement:
+                    raise _native.ConfigurationError(
+                        "impedance measurement configuration readback does not match"
+                    )
+                self._set_lead_off(effective_mask)
+                self.start()
+                window = self._collect_impedance_window(timeout)
+                self._stop_impedance_acquisition()
+            except BaseException as primary:
+                self._cleanup_impedance(original, primary, excitation_started)
+                raise
+            try:
+                self._discard_impedance_tail()
+                self._set_lead_off(0)
+                self.configure(original)
+                if self.get_config() != original:
+                    raise _native.TransportError(
+                        "restored frontend configuration readback does not match"
+                    )
+            except BaseException as primary:
+                self._cleanup_impedance(original, primary, True)
+                raise
+            values, clipped_mask = impedance.estimate_impedance_kohm(
+                window.eeg_uv,
+                window.raw_counts,
+                window.sequence,
+                window.valid,
+                mask=effective_mask,
+                series_kohm=series_kohm,
+                sample_rate_hz=window.sample_rate_hz,
+            )
+            return ImpedanceResult(
+                mask=effective_mask,
+                series_kohm=series_kohm,
+                values_kohm=values,
+                clipped_mask=clipped_mask,
+            )
+
+    def _stop_before_impedance(self) -> None:
+        state = self.snapshot.state
+        if state not in ("ready", "streaming"):
+            raise _native.InvalidStateError(
+                "impedance measurement requires a ready or streaming board, "
+                f"got {state}"
+            )
+        # The GUI confirms a stop before enabling LOFF even when idle.
+        self._stop_impedance_acquisition()
+
+    def _stop_impedance_acquisition(self) -> None:
+        self.stop()
+        state = self.snapshot.state
+        if state != "ready":
+            raise _native.InvalidStateError(
+                f"ESP32 stop was not confirmed (state {state})"
+            )
+
+    def _set_lead_off(self, mask: int) -> None:
+        # The native call waits for a fresh 0xA9 readback matching the mask and
+        # the confirmed reference, mode and enabled channels.
+        self._device.set_lead_off(mask, _LEAD_OFF_TIMEOUT_S)
+
+    def _collect_impedance_window(self, timeout: float) -> SampleBatch:
+        deadline = time.monotonic() + timeout
+        parts: list[SampleBatch] = []
+        slots = 0
+        first_index = 0
+        while True:
+            if parts:
+                last_index = int(parts[-1].sample_indices[-1])
+                if last_index - first_index + 1 >= slots:
+                    break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _native.DeviceTimeoutError(
+                    "impedance window did not complete before timeout"
+                )
+            batch = self.read(None, timeout=remaining)
+            if len(batch) == 0:
+                continue
+            if time.monotonic() - batch.received_at >= _IMPEDANCE_DATA_TIMEOUT_S:
+                parts.clear()
+                continue
+            if (
+                parts
+                and batch.received_at - parts[-1].received_at
+                >= _IMPEDANCE_DATA_TIMEOUT_S
+            ):
+                parts.clear()
+            if not parts:
+                if batch.sample_rate_hz <= 0:
+                    raise _native.TransportError(
+                        "ESP32 impedance window has an invalid sample rate"
+                    )
+                slots = batch.sample_rate_hz * impedance.WINDOW_SECONDS
+                first_index = int(batch.sample_indices[0])
+            parts.append(batch)
+        combined = _combine(parts)
+        assert combined is not None
+        # Estimate the same last four seconds of positions as the GUI ring.
+        start = int(combined.sample_indices[-1]) - (slots - 1)
+        keep = combined.sample_indices >= start
+        return SampleBatch(
+            *(getattr(combined, name)[keep] for name in _ARRAY_FIELDS),
+            combined.generation,
+            combined.sample_rate_hz,
+            combined.received_at,
+        )
+
+    def _discard_impedance_tail(self) -> None:
+        """Drop queued measurement samples so a later read cannot return them."""
+        self._pending.clear()
+        try:
+            # The native queue holds at most 128 batches after confirmed STOP.
+            for _ in range(129):
+                self.read(None, timeout=0.001)
+        except _native.DeviceTimeoutError:
+            return
+        raise _native.TransportError("impedance sample queue did not drain after stop")
+
+    def _cleanup_impedance(
+        self,
+        original: FrontendConfig,
+        primary: BaseException,
+        excitation_started: bool,
+    ) -> None:
+        problems: list[str] = []
+        restore_confirmed = False
+        loff_disabled = not excitation_started
+        state = None
+        try:
+            state = self.snapshot.state
+        except BaseException as error:
+            problems.append(f"state check failed: {error}")
+        if state in ("streaming", "starting", "stopping"):
+            try:
+                self._stop_impedance_acquisition()
+                state = self.snapshot.state
+            except BaseException as error:
+                problems.append(f"stop failed: {error}")
+        if excitation_started and state == "ready":
+            try:
+                self._discard_impedance_tail()
+            except BaseException as error:
+                problems.append(f"stale sample drain failed: {error}")
+            try:
+                self._set_lead_off(0)
+                loff_disabled = True
+            except BaseException as error:
+                problems.append(f"LOFF disable failed: {error}")
+            try:
+                self.configure(original)
+                if self.get_config() != original:
+                    problems.append("restored configuration readback does not match")
+                else:
+                    restore_confirmed = True
+            except BaseException as error:
+                problems.append(f"restore failed: {error}")
+        elif excitation_started:
+            if state == "faulted":
+                # The SDK delivers queued samples before its fault. Discard
+                # them, then accept the fault as the primary error.
+                try:
+                    self._discard_impedance_tail()
+                except BaseException:
+                    pass
+            problems.append(
+                f"device did not reach a confirmed ready state (state {state})"
+            )
+        self._pending.clear()
+        if (
+            problems
+            and excitation_started
+            and (not restore_confirmed or not loff_disabled)
+        ):
+            # Match GUI recovery: isolate uncertain hardware and ask the native
+            # owner for best-effort LOFF shutdown, without claiming restoration.
+            try:
+                self.close()
+            except BaseException as error:
+                problems.append(f"close failed: {error}")
+            finally:
+                self._closed = True
+        if problems:
+            detail = "; ".join(problems)
+            if excitation_started and not loff_disabled:
+                note = (
+                    "impedance cleanup did not confirm LOFF disabled; "
+                    f"electrode excitation may remain enabled: {detail}"
+                )
+            elif excitation_started and not restore_confirmed:
+                note = (
+                    "impedance cleanup disabled LOFF but did not confirm the "
+                    f"original configuration; the session was closed: {detail}"
+                )
+            else:
+                note = f"impedance cleanup did not complete: {detail}"
+            primary.add_note(note)
 
     def iter_batches(
         self, samples: int | None = None, *, timeout: float = 2.0
