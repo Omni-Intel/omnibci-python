@@ -19,7 +19,7 @@ with Board.connect(devices[0], timeout=20) as board:
     board.stop()
 ```
 
-32 导阻抗测量使用 `measure_impedance()`。它停止采集，在选中通道开启 31.25 Hz LOFF，采集 4 秒，然后恢复原配置（LOFF 关闭）；返回后设备保持停止，需要时显式 `start()`。无法确认恢复时保留原异常，并在 note 中说明 LOFF 可能仍在激励，同时关闭 Board。
+32 导阻抗测量使用 `measure_impedance()`。它停止采集，在选中通道开启 31.25 Hz LOFF，采集指定时长（默认 4 秒），然后恢复原配置（LOFF 关闭）；返回后设备保持停止，需要时显式 `start()`。无法确认恢复时保留原异常，并在 note 中说明 LOFF 可能仍在激励，同时关闭 Board。
 
 ```python
 with Board.connect("serial://COM5", device_type="stm32", timeout=20) as board:

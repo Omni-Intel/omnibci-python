@@ -71,7 +71,7 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 
 :py:meth:`omnibci.Board.measure_impedance` 完成一次 32 导阻抗测量。它先确认当前
 配置并停止采集，临时关闭 BIAS 回授，在选中的已启用通道上开启 31.25 Hz LOFF
-激励，采集 4 秒后停止，再恢复原配置且保持 LOFF 关闭。整个事务持有 Board 锁；
+激励，采集指定时长（默认 4 秒）后停止，再恢复原配置且保持 LOFF 关闭。整个事务持有 Board 锁；
 返回后设备停在 ready 状态，不会自动恢复 EEG，需要时显式调用 ``start()``。
 
 .. code-block:: python
@@ -147,3 +147,16 @@ EEG 与事件队列。源时间、回绕、事件关联、32.2.4 时钟就绪条
 配套固件与此 Python 接口尚未完成长时实机稳定性验收。
 软件测试检查帧解析和会话行为；设备连接、掉线恢复、长时采集必须单独记录实测结果。
 运行 ``examples/acquire_stm32.py --help`` 查看显式采集脚本；默认软件测试不访问硬件。
+
+可调阻抗窗口
+------------
+
+``window_seconds`` 指定采样窗口时长，默认 4 秒，范围为 ``[1, 60]``；
+支持小数，按 ``ceil(采样率 * window_seconds)`` 向上取整到采样点。
+它不会先等待稳定再采样，缺失样本仍占时间位置；每通道仍须至少一秒有效数据。
+``timeout`` 是独立的数据采集超时（最大 60 秒），不会随窗口自动增加；
+请为窗口和数据传输预留余量，设置过短可能超时并触发正常清理恢复。
+
+.. code-block:: python
+
+   result = board.measure_impedance(window_seconds=8.0, timeout=15.0)

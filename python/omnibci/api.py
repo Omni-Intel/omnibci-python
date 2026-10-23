@@ -539,20 +539,34 @@ class Board:
         *,
         mask: int | None = None,
         series_kohm: float | None = None,
+        window_seconds: float = 4.0,
         timeout: float = 15.0,
     ) -> ImpedanceResult:
         """Measure STM32 electrode impedance, then leave acquisition stopped.
 
         The whole transaction holds the Board lock: confirm the current
         configuration, stop streaming, enable 31.25 Hz lead-off on the selected
-        enabled channels with BIAS feedback off, read a four-second window,
+        enabled channels with BIAS feedback off, read the requested sample window,
         stop, and restore the original configuration with LOFF disabled. The
         board stays ready; call start() to resume EEG.
+
+        ``window_seconds`` selects 1 to 60 seconds of sample positions
+        (default 4), rounded up to a whole sample. It is not a settling delay.
+        ``timeout`` is a separate collection deadline; allow enough time for
+        the window and delivery overhead. Control timeouts remain separate.
 
         ``mask`` is a 32-bit channel mask, intersected with the enabled
         channels; it defaults to every enabled channel. ``series_kohm``
         defaults to 9.98 kOhm. ``timeout`` bounds collection of the window.
         """
+        if (
+            isinstance(window_seconds, bool)
+            or not isinstance(window_seconds, (int, float))
+            or not math.isfinite(window_seconds)
+            or not 1.0 <= window_seconds <= 60.0
+        ):
+            raise ValueError("window_seconds must be finite and within [1, 60] seconds")
+        window_seconds = float(window_seconds)
         timeout = _timeout(timeout)
         if series_kohm is None:
             series_kohm = impedance.DEFAULT_SERIES_KOHM
@@ -601,7 +615,7 @@ class Board:
                         "impedance measurement configuration readback does not match"
                     )
                 self.start()
-                window = self._collect_impedance_window(timeout)
+                window = self._collect_impedance_window(timeout, window_seconds)
                 self._stop_impedance_acquisition()
             except BaseException as primary:
                 self._cleanup_impedance(restore, primary, excitation_started)
@@ -650,7 +664,9 @@ class Board:
                 f"STM32 stop was not confirmed (state {state})"
             )
 
-    def _collect_impedance_window(self, timeout: float) -> SampleBatch:
+    def _collect_impedance_window(
+        self, timeout: float, window_seconds: float = 4.0
+    ) -> SampleBatch:
         deadline = time.monotonic() + timeout
         parts: list[SampleBatch] = []
         slots = 0
@@ -682,12 +698,12 @@ class Board:
                     raise _native.TransportError(
                         "STM32 impedance window has an invalid sample rate"
                     )
-                slots = batch.sample_rate_hz * impedance.WINDOW_SECONDS
+                slots = math.ceil(batch.sample_rate_hz * window_seconds)
                 first_index = int(batch.sample_indices[0])
             parts.append(batch)
         combined = _combine(parts)
         assert combined is not None
-        # Estimate the same last four seconds of positions as the GUI ring.
+        # Keep the requested duration in sample positions, preserving gaps.
         start = int(combined.sample_indices[-1]) - (slots - 1)
         keep = combined.sample_indices >= start
         return SampleBatch(
