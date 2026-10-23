@@ -134,7 +134,12 @@ impl Backend {
     }
     fn read(&mut self, timeout: Duration) -> Result<Samples, Error> {
         match self {
-            Self::Esp32(d) => d.read(timeout),
+            // Board serializes the complete measurement transaction. Keep its
+            // existing read path while consuming the SDK's isolated LOFF queue.
+            Self::Esp32(d) => match d.snapshot().measurement {
+                omnibci_sdk::session::MeasurementState::Idle => d.read(timeout),
+                _ => d.read_impedance(timeout),
+            },
             Self::Stm32(d) => d.read(timeout),
         }
     }
@@ -424,7 +429,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "6052d32ba71c31411f7c8bfca8fa32f7a600ac0d")?;
+    m.add("SDK_REVISION", "843013ba62f1f05098c8639a657585720ce66a72")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",

@@ -2,7 +2,7 @@
 ==================
 
 本页对应 ``dev/32ch`` 源码，SDK 固定提交为
-``6052d32ba71c31411f7c8bfca8fa32f7a600ac0d``。
+``843013ba62f1f05098c8639a657585720ce66a72``。
 STM32 采集使用板端 Data CDC 或 E73 BLE，当前固件已移除 ESB Dongle 和模式切换。
 外部发送板的串口由 :py:class:`omnibci.TriggerController` 独立持有，
 与采集板的 Data CDC、DFU CDC 均不是同一个端口。安装入口见 :doc:`installation`。

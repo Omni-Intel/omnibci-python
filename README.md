@@ -32,7 +32,7 @@ with Board.connect("serial://COM5", device_type="stm32", timeout=20) as board:
 
 当前 STM32 固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle 和双模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
-SDK 固定到整合当前主线与确认式 ESP32 LOFF 控制的提交 `6052d32ba71c31411f7c8bfca8fa32f7a600ac0d`。本次升级保持公开 Python API 与包版本 0.2.0 不变，只完成离线构建和测试，未重跑新 SDK 的实机测试；验证范围见 [`docs/development.rst`](docs/development.rst)。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
+SDK 固定到整合当前主线与确认式 ESP32 LOFF 控制的提交 `843013ba62f1f05098c8639a657585720ce66a72`。本次升级保持公开 Python API 与包版本 0.2.0 不变，只完成离线构建和测试，未重跑新 SDK 的实机测试；验证范围见 [`docs/development.rst`](docs/development.rst)。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
 
 ## 安装
 
