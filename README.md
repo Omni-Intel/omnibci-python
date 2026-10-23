@@ -19,6 +19,14 @@ with Board.connect(devices[0], timeout=20) as board:
     board.stop()
 ```
 
+32 导阻抗测量使用 `measure_impedance()`。它停止采集，在选中通道开启 31.25 Hz LOFF，采集 4 秒，然后恢复原配置（LOFF 关闭）；返回后设备保持停止，需要时显式 `start()`。无法确认恢复时保留原异常，并在 note 中说明 LOFF 可能仍在激励，同时关闭 Board。
+
+```python
+with Board.connect("serial://COM5", device_type="stm32", timeout=20) as board:
+    result = board.measure_impedance(mask=0x0000FFFF)
+    print(result.values_kohm[0], "kΩ", hex(result.clipped_mask))
+```
+
 板端 USB CDC 使用 `Board.connect("serial://COM5", device_type="stm32")`。
 原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务，当前广播名为 `OmniBCI-32CH`，SDK 也兼容旧名称 `OmniBCI32-BLE`；以实际发现结果为准。要求实际 TX/RX 2M、MTU ≥153、E73 SPI 桥接固件，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
 

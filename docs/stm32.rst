@@ -61,11 +61,47 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 字符串，SDK 分别映射到固件编号 0–4；LOFF 仅允许前三种模式。
 这里不提供 ESP32 的 SRB2 开关或采样率调整。
 
-只在停采时配置，并等待实际硬件确认。LOFF 是激励配置，不是阻抗数值 API；
-本包不复刻 GUI 的阻抗估计和 BIAS 临时补偿流程。关闭时需停采并确认关闭 LOFF，
-失败会报告错误，不能据此认为电极激励已关闭。``close()`` 先请求停止和断开；
-若 Disconnect 停止失败而驱动仍在运行，会在有限宽限期后发送 Shutdown，由 SDK
-执行尽力停止并退出，清理失败仍会报告。
+只在停采时配置，并等待实际硬件确认。关闭时需停采并确认关闭 LOFF，失败会报告
+错误，不能据此认为电极激励已关闭。阻抗测量见下文“阻抗测量”。
+``close()`` 先请求停止和断开；若 Disconnect 停止失败而驱动仍在运行，会在有限
+宽限期后发送 Shutdown，由 SDK 执行尽力停止并退出，清理失败仍会报告。
+
+阻抗测量
+--------
+
+:py:meth:`omnibci.Board.measure_impedance` 完成一次 32 导阻抗测量。它先确认当前
+配置并停止采集，临时关闭 BIAS 回授，在选中的已启用通道上开启 31.25 Hz LOFF
+激励，采集 4 秒后停止，再恢复原配置且保持 LOFF 关闭。整个事务持有 Board 锁；
+返回后设备停在 ready 状态，不会自动恢复 EEG，需要时显式调用 ``start()``。
+
+.. code-block:: python
+
+   from omnibci import Board
+
+   with Board.connect("serial://COM5", device_type="stm32", timeout=20) as board:
+       result = board.measure_impedance(mask=0x0000FFFF, series_kohm=9.98)
+       for channel, value in enumerate(result.values_kohm, start=1):
+           print(channel, value, "kΩ" if value is not None else "无效")
+       print("削顶通道", hex(result.clipped_mask))
+       # 需要继续采集时显式恢复：
+       # board.start()
+
+``mask`` 为 32 位通道掩码，与 ``enabled_mask`` 取交集；省略时测量全部已启用
+通道。``series_kohm`` 默认 9.98 kΩ，传 0 可得到未补偿原值。结果中未选中、
+削顶或有效样本不足的通道为 ``None``。
+
+估计使用 31.25 Hz 正弦、余弦和直流三项最小二乘拟合；ADS1299 的 ±6 nA 交流
+激励基波峰值为 ``4·6/π nA``。扣除串联电阻后负值截为 0。窗口固定 4 秒，通道
+至少需要 1 秒有限有效样本；窗口内任一有效样本达到 ADS1299 满量程码即拒绝该
+通道。相位按设备序号计算，丢包不会压缩载波。该数值是未标定的名义幅值，硬件
+校准前不应作为精确电阻。
+
+失败时先尽力停止并恢复原配置（LOFF 关闭）。若无法确认恢复，原异常保留，并以
+异常 note 明确指出 LOFF 可能仍在激励；此时关闭 Board，避免继续使用状态未知的
+设备。成功恢复后清空测量尾数据，避免后续 EEG 读取返回旧阻抗数据。数据交付
+中断达到 2 秒会重新积累窗口，过期数据不参与计算。``timeout`` 仅限制收集时间，
+启停、配置与恢复另有各自的有界超时。此功能已做离线算法和故障恢复测试，尚未
+做阻抗实机标定。
 
 数据与错误
 ----------

@@ -63,6 +63,23 @@ Board
       :raises OmniBCIError: 设备故障；原生读取抛出的设备异常携带部分结果。
       :raises ValueError: 样本数或 timeout 无效。
 
+   .. py:method:: measure_impedance(*, mask: int | None = None, series_kohm: float | None = None, timeout: float = 15.0) -> ImpedanceResult
+
+      在 STM32 上完成一次 32 导阻抗测量：确认配置、停止采集、关闭 BIAS 回授、
+      在选中通道开启 31.25 Hz LOFF、采集 4 秒、停止并恢复原配置（LOFF 关闭）。
+      整个事务持有 Board 锁；返回后设备处于 ready，不自动恢复 EEG。
+
+      :param mask: 32 位通道掩码，与 ``enabled_mask`` 取交集；省略时使用全部已启用通道。
+      :param series_kohm: 串联电阻补偿，默认 9.98 kΩ，有效范围 ``[0, 1000]``。
+      :param timeout: 采集 4 秒窗口的最长时间，范围 ``(0, 60]``。
+      :raises ValueError: 参数无效，或 mask 未选中任何已启用通道。
+      :raises ConfigurationError: 非 STM32 设备，或模式不允许 LOFF 激励。
+      :raises InvalidStateError: 配置未确认，或设备状态不允许测量。
+      :raises OmniBCIError: 停止、采集或恢复失败。无法确认 LOFF 关闭时，原异常
+         附带说明该硬件状态未确认的 note，并关闭 Board。
+
+      估计方法、样本要求和限制见 :doc:`stm32` 的“阻抗测量”一节。
+
    .. py:method:: iter_batches(samples: int | None = None, *, timeout: float = 2.0) -> Iterator[SampleBatch]
 
       持续调用 :py:meth:`read` 的迭代器，每次读取有独立的 timeout 预算。
@@ -248,6 +265,33 @@ Stm32Config
    的子集，LOFF 只用于前三种模式。
    gains 为 32 个允许的 PGA 增益，verified 表示实际硬件确认，不参与下发。
    用法与固件限制见 :doc:`stm32`。
+
+ImpedanceResult
+---------------
+
+.. py:class:: ImpedanceResult(mask, series_kohm, values_kohm, clipped_mask)
+
+   :py:meth:`Board.measure_impedance` 返回的不可变结果。
+
+   .. py:attribute:: mask
+      :type: int
+
+      实际使用的 32 位 LOFF 通道掩码，已与 ``enabled_mask`` 取交集。
+
+   .. py:attribute:: series_kohm
+      :type: float
+
+      本次补偿使用的串联电阻，单位 kΩ。
+
+   .. py:attribute:: values_kohm
+      :type: tuple[float | None, ...]
+
+      32 个通道的阻抗，单位 kΩ。未选中、削顶或有效样本不足 1 秒的通道为 None。
+
+   .. py:attribute:: clipped_mask
+      :type: int
+
+      窗口内出现 ADS1299 满量程码的已选通道掩码。
 
 SampleBatch
 -----------

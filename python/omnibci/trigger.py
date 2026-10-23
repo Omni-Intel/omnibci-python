@@ -1,4 +1,5 @@
 """Serial trigger dispatch using the Rust SDK; no Python serial implementation."""
+
 from __future__ import annotations
 
 from . import _native
@@ -15,7 +16,9 @@ class TriggerController:
     def __init__(self, port: str, *, timeout: float = 1.0):
         if not isinstance(port, str) or not port.strip():
             raise ValueError("port must be a nonempty string")
-        self._controller = _native.NativeTriggerController.connect(port, _timeout(timeout))
+        self._controller = _native.NativeTriggerController.connect(
+            port, _timeout(timeout)
+        )
 
     @classmethod
     def connect(cls, port: str, *, timeout: float = 1.0) -> TriggerController:
