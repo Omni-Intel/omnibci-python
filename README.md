@@ -94,8 +94,8 @@ with Board.connect("serial://COM5") as board:
     # 测量后采集保持停止；需要继续时显式调用 board.start()
 ```
 
-`measure_impedance(mask=..., series_kohm=..., timeout=15)` 使用 31.25 Hz
-LOFF 激励读取四秒窗口，返回 8 个通道的 kOhm 值。串联补偿默认 SRB1 为
+`measure_impedance(mask=..., series_kohm=..., window_seconds=4.0, timeout=15)` 使用 31.25 Hz
+LOFF 激励读取指定时长（默认四秒）窗口，返回 8 个通道的 kOhm 值。串联补偿默认 SRB1 为
 9.98 kOhm、SRB2 为 4.40 kOhm。未选中、全量程削顶或有效样本不足一秒的
 通道为 `None`。模式必须是 `both_bias`、`eeg` 或 `no_bias`，且配置已确认。
 失败时 Board 会停止采集、关闭 LOFF 并恢复原配置；恢复未确认时会关闭会话，

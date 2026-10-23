@@ -62,17 +62,18 @@ Board
       :raises OmniBCIError: 设备故障；原生读取抛出的设备异常携带部分结果。
       :raises ValueError: 样本数或 timeout 无效。
 
-   .. py:method:: measure_impedance(*, mask: int | None = None, series_kohm: float | None = None, timeout: float = 15.0) -> ImpedanceResult
+   .. py:method:: measure_impedance(*, mask: int | None = None, series_kohm: float | None = None, window_seconds: float = 4.0, timeout: float = 15.0) -> ImpedanceResult
 
       测量 8 通道电极阻抗，结束后板子保持停止状态。事务在 Board 锁内完成：
       保存并校验当前配置、停止采集、关闭 BIAS、启用 31.25 Hz LOFF、读取
-      四秒窗口、停止采集、关闭 LOFF、恢复并校验原配置。失败时尽力清理；
+      指定时长（默认四秒）窗口、停止采集、关闭 LOFF、恢复并校验原配置。失败时尽力清理；
       原配置或 LOFF 关闭未确认时关闭会话并在异常上附加 note。
 
       :param mask: 0–255 的通道掩码，与已启用通道求交集；默认全部已启用通道。
       :param series_kohm: 串联补偿值，范围 ``[0, 1000]``；默认 SRB1 为
          9.98 kOhm，SRB2 为 4.40 kOhm。
-      :param timeout: 四秒窗口的读取超时，范围 ``(0, 60]`` 秒。
+      :param window_seconds: 窗口时长，范围 ``[1, 60]`` 秒，默认 4；按采样点数向上取整。不是稳定等待时间。
+      :param timeout: 指定时长（默认四秒）窗口的读取超时，范围 ``(0, 60]`` 秒。
       :raises ConfigurationError: 模式为 ``shorted`` 或 ``test``，或配置恢复失败。
       :raises InvalidStateError: 配置未确认或停止未确认。
       :raises ValueError: 参数无效，或掩码未选中任何已启用通道。

@@ -37,7 +37,7 @@ Python 辅助接口
    * - ``Board.measure_impedance(...) -> ImpedanceResult``
      - 在 Board 锁内完成停止、LOFF 测量、恢复与结果计算。
    * - ``Board._collect_impedance_window(timeout) -> SampleBatch``
-     - 读取四秒样本序号窗口，丢弃两秒未送达的批次。
+     - 读取指定时长（默认四秒）样本序号窗口，丢弃两秒未送达的批次。
    * - ``Board._cleanup_impedance(original, primary, excitation_started) -> None``
      - 尽力停止、关闭 LOFF、恢复配置；未确认时附加 note 并关闭会话。
    * - ``impedance.estimate_impedance_kohm(...)``

@@ -9,12 +9,14 @@ parser.add_argument("endpoint")
 parser.add_argument("--mask", type=lambda value: int(value, 0), default=None)
 parser.add_argument("--series-kohm", type=float, default=None)
 parser.add_argument("--timeout", type=float, default=15.0)
+parser.add_argument("--window-seconds", type=float, default=4.0)
 args = parser.parse_args()
 
 with Board.connect(args.endpoint) as board:
     result = board.measure_impedance(
         mask=args.mask,
         series_kohm=args.series_kohm,
+        window_seconds=args.window_seconds,
         timeout=args.timeout,
     )
     print(f"mask: 0x{result.mask:02X}")

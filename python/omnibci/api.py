@@ -357,15 +357,21 @@ class Board:
         *,
         mask: int | None = None,
         series_kohm: float | None = None,
+        window_seconds: float = 4.0,
         timeout: float = 15.0,
     ) -> ImpedanceResult:
         """Measure ESP32 electrode impedance, then leave acquisition stopped.
 
         The whole transaction holds the Board lock: confirm the current
         configuration, stop streaming, disable BIAS feedback and enable 31.25 Hz
-        lead-off on the selected enabled channels, read a four-second window,
+        lead-off on the selected enabled channels, read the requested sample window,
         stop, disable lead-off, and restore the original configuration. The
         board stays ready; call start() to resume EEG.
+
+        ``window_seconds`` selects 1 to 60 seconds of sample positions
+        (default 4), rounded up to a whole sample. It is not a settling delay.
+        ``timeout`` is a separate collection deadline; allow enough time for
+        the window and delivery overhead. Control timeouts remain separate.
 
         ``mask`` is an 8-bit channel mask, intersected with the enabled
         channels; it defaults to every enabled channel. ``series_kohm``
@@ -374,6 +380,14 @@ class Board:
         or the restored configuration, the exception carries a note and the
         Board is closed.
         """
+        if (
+            isinstance(window_seconds, bool)
+            or not isinstance(window_seconds, (int, float))
+            or not math.isfinite(window_seconds)
+            or not 1.0 <= window_seconds <= 60.0
+        ):
+            raise ValueError("window_seconds must be finite and within [1, 60] seconds")
+        window_seconds = float(window_seconds)
         timeout = _timeout(timeout)
         if mask is not None and (type(mask) is not int or not 0 <= mask <= 0xFF):
             raise ValueError("mask must be an integer in [0, 255]")
@@ -423,7 +437,7 @@ class Board:
                     )
                 self._set_lead_off(effective_mask)
                 self.start()
-                window = self._collect_impedance_window(timeout)
+                window = self._collect_impedance_window(timeout, window_seconds)
                 self._stop_impedance_acquisition()
             except BaseException as primary:
                 self._cleanup_impedance(original, primary, excitation_started)
@@ -478,7 +492,9 @@ class Board:
         # the confirmed reference, mode and enabled channels.
         self._device.set_lead_off(mask, _LEAD_OFF_TIMEOUT_S)
 
-    def _collect_impedance_window(self, timeout: float) -> SampleBatch:
+    def _collect_impedance_window(
+        self, timeout: float, window_seconds: float = 4.0
+    ) -> SampleBatch:
         deadline = time.monotonic() + timeout
         parts: list[SampleBatch] = []
         slots = 0
@@ -510,12 +526,12 @@ class Board:
                     raise _native.TransportError(
                         "ESP32 impedance window has an invalid sample rate"
                     )
-                slots = batch.sample_rate_hz * impedance.WINDOW_SECONDS
+                slots = math.ceil(batch.sample_rate_hz * window_seconds)
                 first_index = int(batch.sample_indices[0])
             parts.append(batch)
         combined = _combine(parts)
         assert combined is not None
-        # Estimate the same last four seconds of positions as the GUI ring.
+        # Keep the requested duration in sample positions, preserving gaps.
         start = int(combined.sample_indices[-1]) - (slots - 1)
         keep = combined.sample_indices >= start
         return SampleBatch(
