@@ -74,3 +74,19 @@ Python 辅助接口
 
 除 ``PartialReadError`` 在 Python 层定义外，公开异常均由原生扩展定义并重新导出。
 原生扩展同时提供 ``SDK_VERSION`` 和 ``SDK_REVISION``。
+
+Impedance sample isolation
+------------------------------
+
+The ESP32 SDK session now routes confirmed LOFF samples and stop-tail frames
+into a separate bounded queue. The native adapter selects ``read_impedance``
+while excitation is active; ``Board`` still holds its transaction lock through
+configuration, collection, cleanup and restoration. Public ``Board.read`` and
+``Board.measure_impedance`` signatures are unchanged. Other threads cannot
+consume a measurement window through the same Board.
+
+Python retains the NumPy estimator and its default 4-second, configurable
+1–60-second window. The SDK also provides reusable Rust estimation and bounded
+window components for Rust consumers; it does not impose a fixed duration or
+replace Python's timeout, clipping, all-invalid result or cleanup semantics.
+STM32 continues to use its existing Python-side session transaction.
