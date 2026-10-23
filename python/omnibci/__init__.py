@@ -1,8 +1,9 @@
 """Direct OmniBCI acquisition backed by the Rust SDK."""
 
-from . import _native, impedance
+from . import _native
 from .api import (
     Board,
+    ComponentFirmware,
     DeviceInfo,
     DeviceMetadata,
     FrontendConfig,
@@ -10,8 +11,13 @@ from .api import (
     PartialReadError,
     SampleBatch,
     Snapshot,
+    Stm32Config,
+    TriggerEvent,
+    TriggerTiming,
     decode_frames,
+    decode_triggers,
 )
+from .trigger import TriggerController
 
 OmniBCIError = _native.OmniBCIError
 DeviceTimeoutError = _native.DeviceTimeoutError
@@ -20,20 +26,25 @@ ConfigurationError = _native.ConfigurationError
 DisconnectedError = _native.DisconnectedError
 BufferOverflowError = _native.BufferOverflowError
 TransportError = _native.TransportError
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 SDK_VERSION = _native.SDK_VERSION
 SDK_REVISION = _native.SDK_REVISION
 __all__ = [
     "Board",
+    "TriggerEvent",
+    "TriggerTiming",
+    "decode_triggers",
+    "TriggerController",
+    "ComponentFirmware",
     "DeviceInfo",
     "DeviceMetadata",
     "FrontendConfig",
     "ImpedanceResult",
+    "Stm32Config",
     "SampleBatch",
     "Snapshot",
     "PartialReadError",
     "decode_frames",
-    "impedance",
     "OmniBCIError",
     "DeviceTimeoutError",
     "InvalidStateError",

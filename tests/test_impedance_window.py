@@ -16,7 +16,7 @@ from test_impedance import (
 
 
 def board_for(fake):
-    return o.Board(fake)
+    return o.Board(fake, device_type="stm32")
 
 
 @pytest.mark.parametrize("seconds", [1, 1.002, 2.5, 4, 8, 60])

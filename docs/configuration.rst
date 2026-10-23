@@ -1,6 +1,9 @@
 前端配置
 ========
 
+本页为 ESP32 八导配置。STM32 使用独立的 :py:class:`omnibci.Stm32Config`，
+32 位掩码与 LOFF 约束见 :doc:`stm32`。
+
 :py:class:`omnibci.FrontendConfig` 是不可变数据类，用 ``dataclasses.replace()``
 创建修改后的配置。在停止采集时调用 ``configure()``，等待 SDK 确认。
 

@@ -38,6 +38,7 @@ class DeviceInfo:
     transport: Literal["serial", "ble"]
     address: str
     rssi_dbm: int | None = None
+    device_type: Literal["esp32", "stm32"] = "esp32"
 
     @property
     def endpoint(self) -> str:
@@ -45,10 +46,55 @@ class DeviceInfo:
 
 
 @dataclass(frozen=True)
+class ComponentFirmware:
+    """Independently reported firmware provenance for one device component.
+
+    ``state`` is one of ``available``, ``unsupported``, ``timeout`` or
+    ``read_failed``. Version, revision and dirty are absent when the component
+    cannot report trustworthy provenance.
+    """
+
+    version: str | None = None
+    revision: str | None = None
+    dirty: bool | None = None
+    state: str = ""
+    protocol: str = ""
+
+    @classmethod
+    def _from_wire(cls, value: dict) -> ComponentFirmware:
+        return cls(
+            version=value.get("version"),
+            revision=value.get("revision"),
+            dirty=value.get("dirty"),
+            state=value.get("state", ""),
+            protocol=value.get("protocol", ""),
+        )
+
+
+@dataclass(frozen=True)
 class DeviceMetadata:
     firmware: str
     hardware: str
     protocol: str
+    stm32: ComponentFirmware | None = None
+    e73: ComponentFirmware | None = None
+
+    @classmethod
+    def _from_wire(cls, value: dict) -> DeviceMetadata:
+        # Older ESP32 snapshots and mocks omit the component fields entirely.
+        return cls(
+            firmware=value["firmware"],
+            hardware=value["hardware"],
+            protocol=value["protocol"],
+            stm32=(
+                ComponentFirmware._from_wire(value["stm32"])
+                if value.get("stm32")
+                else None
+            ),
+            e73=(
+                ComponentFirmware._from_wire(value["e73"]) if value.get("e73") else None
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -102,6 +148,56 @@ class FrontendConfig:
         )
 
 
+@dataclass(frozen=True)
+class Stm32Config:
+    """Confirmed full configuration requires AE/BE-capable 32.0.5 firmware."""
+
+    mode: Literal["both_bias", "eeg", "no_bias", "shorted", "test"] = "both_bias"
+    enabled_mask: int = 0xFFFFFFFF
+    bias_mask: int = 0xFFFFFFFF
+    loff_mask: int = 0
+    gains: tuple[int, ...] = (24,) * 32
+    verified: bool = False
+
+    def __post_init__(self) -> None:
+        if self.mode not in _MODES:
+            raise ValueError("unsupported mode")
+        for name in ("enabled_mask", "bias_mask", "loff_mask"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value <= 0xFFFFFFFF:
+                raise ValueError(f"{name} must be an integer in [0, 4294967295]")
+        gains = tuple(self.gains)
+        if len(gains) != 32 or any(
+            type(g) is not int or g not in (1, 2, 4, 6, 8, 12, 24) for g in gains
+        ):
+            raise ValueError("gains must contain 32 values from 1, 2, 4, 6, 8, 12, 24")
+        if self.bias_mask & ~self.enabled_mask or self.loff_mask & ~self.enabled_mask:
+            raise ValueError("BIAS and LOFF channels must be enabled")
+        if self.loff_mask and _MODES.index(self.mode) > 2:
+            raise ValueError("LOFF requires both_bias, eeg or no_bias mode")
+        object.__setattr__(self, "gains", gains)
+
+    def _wire(self) -> dict:
+        return dict(
+            mode=_MODES.index(self.mode),
+            enabled_mask=self.enabled_mask,
+            bias_mask=self.bias_mask,
+            loff_mask=self.loff_mask,
+            gains=self.gains,
+        )
+
+    @classmethod
+    def _from_wire(cls, value: dict) -> Stm32Config:
+        return cls(
+            mode=_MODES[value["mode"]],
+            enabled_mask=value["enabled_mask"],
+            bias_mask=value["bias_mask"],
+            loff_mask=value["loff_mask"],
+            gains=tuple(value["gains"]),
+            verified=value["verified"],
+        )
+
+
 @dataclass(frozen=True, eq=False)
 class SampleBatch:
     """Read-only arrays in sample-major order; gaps are preserved in sample_indices."""
@@ -116,6 +212,21 @@ class SampleBatch:
     generation: int
     sample_rate_hz: int
     received_at: float
+    source_timestamp_us: NDArray[np.uint32] | None = None
+    source_timestamp_valid: NDArray[np.bool_] | None = None
+
+    def __post_init__(self):
+        n = len(self.sequence)
+        for name, dtype in (
+            ("source_timestamp_us", "<u4"),
+            ("source_timestamp_valid", "?"),
+        ):
+            value = getattr(self, name)
+            if value is None:
+                value = np.frombuffer(bytes(n * np.dtype(dtype).itemsize), dtype=dtype)
+                object.__setattr__(self, name, value)
+            if len(value) != n:
+                raise ValueError("source timestamp length does not match samples")
 
     def __len__(self) -> int:
         return len(self.sequence)
@@ -130,24 +241,39 @@ class SampleBatch:
             self.generation,
             self.sample_rate_hz,
             self.received_at,
+            self.source_timestamp_us[start:stop],
+            self.source_timestamp_valid[start:stop],
         )
 
     @classmethod
     def _from_wire(cls, data: dict) -> SampleBatch:
-        arrays = [
-            np.frombuffer(data[name], dtype=dtype) for name, dtype in _ARRAY_DTYPES
-        ]
-        n = len(arrays[2])
-        arrays[0] = arrays[0].reshape(n, 8)
-        arrays[1] = arrays[1].reshape(n, 8)
-        arrays[5] = arrays[5].reshape(n, 3)
-        if any(len(a) != n for a in arrays):
-            raise _native.TransportError("inconsistent sample buffer lengths")
+        try:
+            width = data.get("channel_count", 8)
+            status_width = data.get("status_width", 3)
+            if (
+                type(width) is not int
+                or type(status_width) is not int
+                or (width, status_width) not in ((8, 3), (32, 12))
+            ):
+                raise ValueError("unsupported sample shape")
+            arrays = [
+                np.frombuffer(data[name], dtype=dtype) for name, dtype in _ARRAY_DTYPES
+            ]
+            n = len(arrays[2])
+            arrays[0] = arrays[0].reshape(n, width)
+            arrays[1] = arrays[1].reshape(n, width)
+            arrays[5] = arrays[5].reshape(n, status_width)
+            if any(len(a) != n for a in arrays):
+                raise ValueError("inconsistent sample buffer lengths")
+        except (ValueError, TypeError, KeyError) as error:
+            raise _native.TransportError("invalid sample buffers") from error
         return cls(
             *arrays,
             data["generation"],
             data["sample_rate_hz"],
             time.monotonic() - data["received_age_s"],
+            np.frombuffer(data.get("source_timestamp_us", bytes(n * 4)), dtype="<u4"),
+            np.frombuffer(data.get("source_timestamp_valid", bytes(n)), dtype="?"),
         )
 
 
@@ -184,7 +310,18 @@ def _combine(batches: list[SampleBatch]) -> SampleBatch | None:
             np.frombuffer(joined.tobytes(), dtype=joined.dtype).reshape(joined.shape)
         )
     return SampleBatch(
-        *arrays, first.generation, first.sample_rate_hz, batches[-1].received_at
+        *arrays,
+        first.generation,
+        first.sample_rate_hz,
+        batches[-1].received_at,
+        np.frombuffer(
+            np.concatenate([b.source_timestamp_us for b in batches]).tobytes(),
+            dtype="<u4",
+        ),
+        np.frombuffer(
+            np.concatenate([b.source_timestamp_valid for b in batches]).tobytes(),
+            dtype="?",
+        ),
     )
 
 
@@ -192,7 +329,7 @@ def _combine(batches: list[SampleBatch]) -> SampleBatch | None:
 class Snapshot:
     state: str
     metadata: DeviceMetadata | None
-    config: FrontendConfig | None
+    config: FrontendConfig | Stm32Config | None
     generation: int
     samples: int
     missing_samples: int
@@ -203,9 +340,9 @@ class Snapshot:
 
 @dataclass(frozen=True)
 class ImpedanceResult:
-    """One 8-channel ESP32 lead-off measurement.
+    """One ESP32 or STM32 lead-off measurement.
 
-    ``values_kohm`` always has 8 entries. Channels outside ``mask``, channels
+    ``values_kohm`` has 8 or 32 entries, matching the device. Channels outside ``mask``, channels
     rejected by full-scale clipping and channels without enough finite valid
     samples stay None. ``clipped_mask`` is restricted to ``mask``.
     """
@@ -233,34 +370,61 @@ class Board:
     No Python callback runs in the device's ACK or receive thread.
     """
 
-    def __init__(self, native_device):
+    def __init__(self, native_device, device_type="esp32"):
         self._device = native_device
+        self._device_type = device_type
         self._pending: deque[SampleBatch] = deque()
         self._lock = threading.RLock()
         self._closed = False
 
     @classmethod
-    def connect(cls, device: str | DeviceInfo, *, timeout: float = 15.0) -> Board:
+    def connect(
+        cls,
+        device: str | DeviceInfo,
+        *,
+        timeout: float = 15.0,
+        device_type: Literal["esp32", "stm32"] | None = None,
+    ) -> Board:
+        if isinstance(device, DeviceInfo):
+            if device_type is not None and device_type != device.device_type:
+                raise ValueError("device_type conflicts with discovered device")
+            device_type = _device_type(device.device_type)
+        else:
+            device_type = _device_type("esp32" if device_type is None else device_type)
         endpoint = device.endpoint if isinstance(device, DeviceInfo) else device
         if not isinstance(endpoint, str):
             raise TypeError("device must be an endpoint string or DeviceInfo")
-        return cls(_native.NativeDevice.connect(endpoint, _timeout(timeout)))
+        timeout = _timeout(timeout)
+        native = (
+            _native.NativeDevice.connect(endpoint, timeout)
+            if device_type == "esp32"
+            else _native.NativeDevice.connect(endpoint, timeout, device_type)
+        )
+        return cls(native, device_type)
 
     @staticmethod
     def discover(
-        *, transport: Literal["serial", "ble"] = "serial", timeout: float = 10.0
+        *,
+        transport: Literal["serial", "ble"] = "serial",
+        timeout: float = 10.0,
+        device_type: Literal["esp32", "stm32"] = "esp32",
     ) -> list[DeviceInfo]:
         timeout = _timeout(timeout)
+        _device_type(device_type)
         if transport == "serial":
             # Enumeration does not open ports; entries are candidates, not verified OmniBCI devices.
             return [
-                DeviceInfo(port, port, "serial", port)
+                DeviceInfo(port, port, "serial", port, device_type=device_type)
                 for port in _native.serial_ports()
             ]
         if transport == "ble":
             return [
-                DeviceInfo(transport="ble", **item)
-                for item in json.loads(_native.discover_ble_json(timeout))
+                DeviceInfo(transport="ble", device_type=device_type, **item)
+                for item in json.loads(
+                    _native.discover_ble_json(timeout)
+                    if device_type == "esp32"
+                    else _native.discover_ble_json(timeout, device_type)
+                )
             ]
         raise ValueError("transport must be serial or ble")
 
@@ -269,10 +433,16 @@ class Board:
         with self._lock:
             value = json.loads(self._device.snapshot_json())
             value["metadata"] = (
-                DeviceMetadata(**value["metadata"]) if value["metadata"] else None
+                DeviceMetadata._from_wire(value["metadata"])
+                if value["metadata"]
+                else None
             )
             value["config"] = (
-                FrontendConfig._from_wire(value["config"]) if value["config"] else None
+                (
+                    Stm32Config if self._device_type == "stm32" else FrontendConfig
+                )._from_wire(value["config"])
+                if value["config"]
+                else None
             )
             return Snapshot(**value)
 
@@ -280,7 +450,7 @@ class Board:
     def info(self) -> DeviceMetadata | None:
         return self.snapshot.metadata
 
-    def get_config(self) -> FrontendConfig:
+    def get_config(self) -> FrontendConfig | Stm32Config:
         """Return the SDK's last confirmed hardware configuration."""
         config = self.snapshot.config
         if config is None:
@@ -291,9 +461,12 @@ class Board:
         if self._closed:
             raise _native.DisconnectedError("board is closed")
 
-    def configure(self, config: FrontendConfig, *, timeout: float = 3.0) -> None:
-        if not isinstance(config, FrontendConfig):
-            raise TypeError("config must be FrontendConfig")
+    def configure(
+        self, config: FrontendConfig | Stm32Config, *, timeout: float = 3.0
+    ) -> None:
+        expected = Stm32Config if self._device_type == "stm32" else FrontendConfig
+        if not isinstance(config, expected):
+            raise TypeError(f"config must be {expected.__name__}")
         with self._lock:
             self._ensure_open()
             self._device.configure(json.dumps(config._wire()), _timeout(timeout))
@@ -303,6 +476,16 @@ class Board:
             self._ensure_open()
             self._device.start(_timeout(timeout))
             self._pending.clear()
+
+    def read_triggers(self) -> tuple[TriggerEvent, ...]:
+        """Drain currently available STM32 events independently of EEG reads.
+
+        Nonblocking. Call regularly; a 16384-event queue reports overflow.
+        Stop preserves queued events; a successful new start clears them.
+        """
+        with self._lock:
+            self._ensure_open()
+            return _trigger_events(json.loads(self._device.read_triggers_json()))
 
     def stop(self, *, timeout: float = 5.0) -> None:
         with self._lock:
@@ -353,6 +536,35 @@ class Board:
                     return combined
 
     def measure_impedance(
+        self,
+        *,
+        mask: int | None = None,
+        series_kohm: float | None = None,
+        window_seconds: float = 4.0,
+        timeout: float = 15.0,
+    ) -> ImpedanceResult:
+        """Measure 8-channel ESP32 or 32-channel STM32 impedance.
+
+        Stop acquisition, suppress BIAS feedback, enable lead-off, collect the
+        requested window, then disable lead-off and restore configuration.
+        Acquisition stays stopped. The window defaults to 4 seconds and accepts
+        1 to 60 seconds, rounded up to whole samples; timeout is independent.
+        ESP32 SRB2 defaults to 4.40 kOhm series compensation; otherwise 9.98.
+        The returned tuple has one entry per physical channel.
+        """
+        measure = (
+            self._measure_impedance_stm32
+            if self._device_type == "stm32"
+            else self._measure_impedance_esp32
+        )
+        return measure(
+            mask=mask,
+            series_kohm=series_kohm,
+            window_seconds=window_seconds,
+            timeout=timeout,
+        )
+
+    def _measure_impedance_esp32(
         self,
         *,
         mask: int | None = None,
@@ -440,7 +652,7 @@ class Board:
                 window = self._collect_impedance_window(timeout, window_seconds)
                 self._stop_impedance_acquisition()
             except BaseException as primary:
-                self._cleanup_impedance(original, primary, excitation_started)
+                self._cleanup_impedance_esp32(original, primary, excitation_started)
                 raise
             try:
                 self._discard_impedance_tail()
@@ -451,7 +663,119 @@ class Board:
                         "restored frontend configuration readback does not match"
                     )
             except BaseException as primary:
-                self._cleanup_impedance(original, primary, True)
+                self._cleanup_impedance_esp32(original, primary, True)
+                raise
+            values, clipped_mask = impedance.estimate_impedance_kohm(
+                window.eeg_uv,
+                window.raw_counts,
+                window.sequence,
+                window.valid,
+                mask=effective_mask,
+                series_kohm=series_kohm,
+                sample_rate_hz=window.sample_rate_hz,
+            )
+            return ImpedanceResult(
+                mask=effective_mask,
+                series_kohm=series_kohm,
+                values_kohm=values,
+                clipped_mask=clipped_mask,
+            )
+
+    def _measure_impedance_stm32(
+        self,
+        *,
+        mask: int | None = None,
+        series_kohm: float | None = None,
+        window_seconds: float = 4.0,
+        timeout: float = 15.0,
+    ) -> ImpedanceResult:
+        """Measure STM32 electrode impedance, then leave acquisition stopped.
+
+        The whole transaction holds the Board lock: confirm the current
+        configuration, stop streaming, enable 31.25 Hz lead-off on the selected
+        enabled channels with BIAS feedback off, read the requested sample window,
+        stop, and restore the original configuration with LOFF disabled. The
+        board stays ready; call start() to resume EEG.
+
+        ``window_seconds`` selects 1 to 60 seconds of sample positions
+        (default 4), rounded up to a whole sample. It is not a settling delay.
+        ``timeout`` is a separate collection deadline; allow enough time for
+        the window and delivery overhead. Control timeouts remain separate.
+
+        ``mask`` is a 32-bit channel mask, intersected with the enabled
+        channels; it defaults to every enabled channel. ``series_kohm``
+        defaults to 9.98 kOhm. ``timeout`` bounds collection of the window.
+        """
+        if (
+            isinstance(window_seconds, bool)
+            or not isinstance(window_seconds, (int, float))
+            or not math.isfinite(window_seconds)
+            or not 1.0 <= window_seconds <= 60.0
+        ):
+            raise ValueError("window_seconds must be finite and within [1, 60] seconds")
+        window_seconds = float(window_seconds)
+        timeout = _timeout(timeout)
+        if series_kohm is None:
+            series_kohm = impedance.DEFAULT_SERIES_KOHM
+        elif (
+            isinstance(series_kohm, bool)
+            or not isinstance(series_kohm, (int, float))
+            or not 0.0 <= series_kohm <= 1000.0
+        ):
+            raise ValueError("series_kohm must be finite and within [0, 1000]")
+        else:
+            series_kohm = float(series_kohm)
+        if mask is not None and (type(mask) is not int or not 0 <= mask <= 0xFFFFFFFF):
+            raise ValueError("mask must be an integer in [0, 4294967295]")
+
+        with self._lock:
+            self._ensure_open()
+            if self._device_type != "stm32":
+                raise _native.ConfigurationError(
+                    "impedance measurement requires an STM32 board"
+                )
+            original = self.get_config()
+            if not isinstance(original, Stm32Config) or not original.verified:
+                raise _native.InvalidStateError(
+                    "STM32 configuration has not been confirmed"
+                )
+            if original.mode not in _IMPEDANCE_MODES:
+                raise _native.ConfigurationError(
+                    "impedance requires both_bias, eeg or no_bias mode"
+                )
+            effective_mask = (
+                original.enabled_mask if mask is None else mask
+            ) & original.enabled_mask
+            if effective_mask == 0:
+                raise ValueError("mask must select at least one enabled channel")
+            measurement = replace(original, loff_mask=effective_mask, bias_mask=0)
+            restore = replace(original, loff_mask=0)
+
+            excitation_started = False
+            try:
+                self._stop_before_impedance()
+                self._pending.clear()
+                excitation_started = True
+                self.configure(measurement)
+                if self.get_config() != measurement:
+                    raise _native.ConfigurationError(
+                        "impedance measurement configuration readback does not match"
+                    )
+                self.start()
+                window = self._collect_impedance_window(timeout, window_seconds)
+                self._stop_impedance_acquisition()
+            except BaseException as primary:
+                self._cleanup_impedance(restore, primary, excitation_started)
+                raise
+            try:
+                self._discard_impedance_tail()
+                self.configure(restore)
+                if self.get_config() != restore:
+                    raise _native.TransportError(
+                        "restored STM32 configuration readback does not match"
+                    )
+            except BaseException as primary:
+                self._cleanup_impedance(restore, primary, True)
                 raise
             values, clipped_mask = impedance.estimate_impedance_kohm(
                 window.eeg_uv,
@@ -484,13 +808,8 @@ class Board:
         state = self.snapshot.state
         if state != "ready":
             raise _native.InvalidStateError(
-                f"ESP32 stop was not confirmed (state {state})"
+                f"STM32 stop was not confirmed (state {state})"
             )
-
-    def _set_lead_off(self, mask: int) -> None:
-        # The native call waits for a fresh 0xA9 readback matching the mask and
-        # the confirmed reference, mode and enabled channels.
-        self._device.set_lead_off(mask, _LEAD_OFF_TIMEOUT_S)
 
     def _collect_impedance_window(
         self, timeout: float, window_seconds: float = 4.0
@@ -512,7 +831,7 @@ class Board:
             batch = self.read(None, timeout=remaining)
             if len(batch) == 0:
                 continue
-            if time.monotonic() - batch.received_at >= _IMPEDANCE_DATA_TIMEOUT_S:
+            if time.monotonic() - batch.received_at >= 2.0:
                 parts.clear()
                 continue
             if (
@@ -524,7 +843,7 @@ class Board:
             if not parts:
                 if batch.sample_rate_hz <= 0:
                     raise _native.TransportError(
-                        "ESP32 impedance window has an invalid sample rate"
+                        "STM32 impedance window has an invalid sample rate"
                     )
                 slots = math.ceil(batch.sample_rate_hz * window_seconds)
                 first_index = int(batch.sample_indices[0])
@@ -539,6 +858,8 @@ class Board:
             combined.generation,
             combined.sample_rate_hz,
             combined.received_at,
+            combined.source_timestamp_us[keep],
+            combined.source_timestamp_valid[keep],
         )
 
     def _discard_impedance_tail(self) -> None:
@@ -553,6 +874,75 @@ class Board:
         raise _native.TransportError("impedance sample queue did not drain after stop")
 
     def _cleanup_impedance(
+        self,
+        restore: Stm32Config,
+        primary: BaseException,
+        excitation_started: bool,
+    ) -> None:
+        problems: list[str] = []
+        restore_confirmed = False
+        state = None
+        try:
+            state = self.snapshot.state
+        except BaseException as error:
+            problems.append(f"state check failed: {error}")
+        if state in ("streaming", "starting", "stopping"):
+            try:
+                self._stop_impedance_acquisition()
+                state = self.snapshot.state
+            except BaseException as error:
+                problems.append(f"stop failed: {error}")
+        if excitation_started and state == "ready":
+            try:
+                self._discard_impedance_tail()
+            except BaseException as error:
+                problems.append(f"stale sample drain failed: {error}")
+            try:
+                self.configure(restore)
+                if self.get_config() != restore:
+                    problems.append("restored configuration readback does not match")
+                else:
+                    restore_confirmed = True
+            except BaseException as error:
+                problems.append(f"restore failed: {error}")
+        elif excitation_started:
+            if state == "faulted":
+                # The SDK delivers queued samples before its fault. Discard
+                # them, then accept the fault as the primary error.
+                try:
+                    self._discard_impedance_tail()
+                except BaseException:
+                    pass
+            problems.append(
+                f"device did not reach a confirmed ready state (state {state})"
+            )
+        self._pending.clear()
+        if problems and excitation_started and not restore_confirmed:
+            # Match GUI recovery: isolate uncertain hardware and ask the native
+            # owner for best-effort LOFF shutdown, without claiming restoration.
+            try:
+                self.close()
+            except BaseException as error:
+                problems.append(f"close failed: {error}")
+            finally:
+                self._closed = True
+        if problems:
+            detail = "; ".join(problems)
+            if excitation_started and not restore_confirmed:
+                note = (
+                    "impedance cleanup did not confirm LOFF disabled; "
+                    f"electrode excitation may remain enabled: {detail}"
+                )
+            else:
+                note = f"impedance cleanup did not complete: {detail}"
+            primary.add_note(note)
+
+    def _set_lead_off(self, mask: int) -> None:
+        # The native call waits for a fresh 0xA9 readback matching the mask and
+        # the confirmed reference, mode and enabled channels.
+        self._device.set_lead_off(mask, _LEAD_OFF_TIMEOUT_S)
+
+    def _cleanup_impedance_esp32(
         self,
         original: FrontendConfig,
         primary: BaseException,
@@ -660,13 +1050,64 @@ class Board:
         return False
 
 
-def decode_frames(data: bytes, *, gains: tuple[int, ...] = (24,) * 8) -> SampleBatch:
+def decode_frames(
+    data: bytes,
+    *,
+    gains: tuple[int, ...] | None = None,
+    device_type: Literal["esp32", "stm32"] = "esp32",
+) -> SampleBatch:
     """Decode a complete raw serial buffer using the SDK, without touching hardware.
 
     Not a streaming parser: trailing partial frames are not retained between calls.
     CRC-invalid frames are skipped by the SDK. Suitable for complete captured buffers.
     """
-    config = FrontendConfig(gains=gains)
+    _device_type(device_type)
+    config_type = Stm32Config if device_type == "stm32" else FrontendConfig
+    config = config_type() if gains is None else config_type(gains=gains)
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes")
-    return SampleBatch._from_wire(_native.decode_frames(data, config.gains))
+    packed = (
+        _native.decode_frames(data, config.gains)
+        if device_type == "esp32"
+        else _native.decode_frames(data, config.gains, device_type)
+    )
+    return SampleBatch._from_wire(packed)
+
+
+def _device_type(value: str) -> str:
+    if value not in ("esp32", "stm32"):
+        raise ValueError("device_type must be esp32 or stm32")
+    return value
+
+
+@dataclass(frozen=True)
+class TriggerTiming:
+    trigger_timestamp_us: int
+    anchor_timestamp_us: int
+
+
+@dataclass(frozen=True)
+class TriggerEvent:
+    generation: int
+    code: int
+    sequence: int
+    source_timestamp_ms: int | None
+    timing: TriggerTiming | None
+
+
+def _trigger_events(value: dict) -> tuple[TriggerEvent, ...]:
+    return tuple(
+        TriggerEvent(
+            value["generation"],
+            e["code"],
+            e["sequence"],
+            e["source_timestamp_ms"],
+            TriggerTiming(**e["timing"]) if e["timing"] is not None else None,
+        )
+        for e in value["events"]
+    )
+
+
+def decode_triggers(data: bytes) -> tuple[TriggerEvent, ...]:
+    """Decode complete STM32 trigger packets offline; timestamps remain integers."""
+    return _trigger_events(json.loads(_native.decode_triggers_json(data)))

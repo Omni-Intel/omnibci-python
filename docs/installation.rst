@@ -13,10 +13,8 @@
 安装 wheel
 ----------
 
-阻抗接口需使用 ``dev/8ch`` 的开发 wheel 或本分支源码。既有 ``v0.1.2``
-Release 不包含该接口；开发包版本仍为 0.1.2，不能仅凭文件名区分。
-运行 ``python -c "import omnibci; print(omnibci.SDK_REVISION)"`` 应输出
-``dab77683cec6c60fab8244648acb1b5f4514cf09``。
+``dev/32ch`` 开发构建使用分支 CI artifacts 或本机构建的 wheel；未发布 tag 前，
+不要把文档中的 0.2.0 文件名理解为已存在正式 Release。
 
 从 `GitHub Releases <https://github.com/Omni-Intel/omnibci-python/releases>`_
 下载匹配操作系统、CPU 架构和 Python 的 wheel。以下为 Windows x86-64 示例，
@@ -24,7 +22,7 @@ Release 不包含该接口；开发包版本仍为 0.1.2，不能仅凭文件名
 
 .. code-block:: console
 
-   python -m pip install path/to/omnibci-0.1.2-cp311-abi3-win_amd64.whl
+   python -m pip install path/to/omnibci-0.2.0-cp311-abi3-win_amd64.whl
    python -c "import omnibci; print(omnibci.__version__)"
 
 从源码安装
@@ -35,15 +33,14 @@ Build Tools；Linux 需要 pkg-config、libudev-dev 和 libdbus-1-dev。
 
 .. code-block:: console
 
-   git clone --branch dev/8ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
+   git clone --branch dev/32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
    cd omnibci-python
-   python -m venv .venv
+   uv sync --locked --all-extras
 
-激活虚拟环境后执行：
+使用该项目环境执行：
 
 .. code-block:: console
 
-   python -m pip install "maturin>=1.15,<2" numpy pytest
-   maturin develop
+   uv run --no-sync maturin develop
 
 已有检出目录使用 ``git submodule update --init --recursive`` 初始化 SDK。
