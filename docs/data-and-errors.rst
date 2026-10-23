@@ -7,12 +7,20 @@
 :py:class:`omnibci.SampleBatch` 的数组以样本为第一维。
 SDK 返回的数组只读；需要原地处理时使用 ``batch.eeg_uv.copy()``。
 ``valid`` 标志不会自动过滤数据，按需使用 ``batch.eeg_uv[batch.valid]``。
+ESP32 的 EEG/状态形状为 ``(N,8)``/``(N,3)``，STM32 为 ``(N,32)``/``(N,12)``。
+不同设备布局的批次不能合并。32 导示例见 :doc:`stm32`。
 
 ``sample_indices`` 保留本次采集的丢包间隔，SDK 不补零。
 ``sample_time_s`` 等于 ``sample_indices / sample_rate_hz``。
 ``received_at`` 使用主机 ``time.monotonic()`` 时间轴，表示近似 SDK 交付时间；
 合批时取最后一批的时间，不代表硬件采样时刻或 Unix 时间。
 ``generation`` 用于区分成功开始的采集会话。
+
+STM32 的 ``source_timestamp_us`` 保存 uint32 DRDY 设备微秒时间低 32 位，
+``source_timestamp_valid`` 标记是否可用。不可用时值为 0 且掩码为 False；
+掩码为 True 时 0 是合法回绕值。ESP32 当前不提供此源时间。相邻时间差按
+模 ``2^32`` 计算，它与主机 ``received_at`` 不是同一时间轴。
+固定长度读取、切片、合批与离线解码保留这两个数组。
 
 读取与缓存
 ----------
@@ -22,6 +30,10 @@ SDK 返回的数组只读；需要原地处理时使用 ``batch.eeg_uv.copy()``�
   n 必须是 1–1,000,000 的整数，多出的样本保留给下一次读取。
 * ``stop()`` 保留已接收而尚未读取的尾部样本；新的 ``start()`` 清空上次采集缓存。
 * Rust 接收队列最多容纳 128 批。消费过慢导致溢出时报告故障，不静默覆盖旧数据。
+
+硬件触发事件由 :py:meth:`omnibci.Board.read_triggers` 独立消费，不能只读取
+EEG 而忽略事件队列。事件可能晚于锚点样本到达，应按 generation 和 sequence
+关联，保留重复码、code=0 及源时间。队列、溢出与 STOP/START 边界见 :doc:`trigger`。
 
 超时与部分结果
 --------------

@@ -1,15 +1,49 @@
 # OmniBCI Python
 
-独立 Rust SDK 的 Python 接口。通过 USB 串口或 BLE 连接 OmniBCI ESP32 + ADS1299 板子，配置前端并采集 8 通道、250 Hz EEG。
+独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + ADS1299 32 导的板端 USB CDC 与 E73 BLE 直连，均为 250 Hz。`dev/32ch` 分支增加的 STM32 路径使用 Rust SDK 的 STM32 驱动。
+
+## STM32 32 导 BLE
+
+```python
+from omnibci import Board
+
+devices = Board.discover(transport="ble", device_type="stm32", timeout=10)
+if not devices:
+    raise RuntimeError("未发现 STM32/E73 BLE 设备")
+# 多台设备时，请按设备标识选择目标；这里以第一台为例。
+with Board.connect(devices[0], timeout=20) as board:
+    print(board.get_config())
+    board.start()
+    batch = board.read(250, timeout=5)
+    print(batch.eeg_uv.shape)  # (250, 32)
+    board.stop()
+```
+
+32 导阻抗测量使用 `measure_impedance()`。它停止采集，在选中通道开启 31.25 Hz LOFF，采集指定时长（默认 4 秒），然后恢复原配置（LOFF 关闭）；返回后设备保持停止，需要时显式 `start()`。无法确认恢复时保留原异常，并在 note 中说明 LOFF 可能仍在激励，同时关闭 Board。
+
+```python
+with Board.connect("serial://COM5", device_type="stm32", timeout=20) as board:
+    result = board.measure_impedance(mask=0x0000FFFF)
+    print(result.values_kohm[0], "kΩ", hex(result.clipped_mask))
+```
+
+板端 USB CDC 使用 `Board.connect("serial://COM5", device_type="stm32")`。
+原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务，当前广播名为 `OmniBCI-32CH`，SDK 也兼容旧名称 `OmniBCI32-BLE`；以实际发现结果为准。要求实际 TX/RX 2M、MTU ≥153、E73 SPI 桥接固件，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
+
+当前 STM32 固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle 和双模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
+
+SDK 固定到 `omnibci-sdk` 的 `master` 分支提交 `e1f25b3a6d272e5040929c53b331d45738ff6d73`。本次升级保持公开 Python API 与包版本 0.2.0 不变，只完成离线构建和测试，未重跑新 SDK 的实机测试；验证范围见 [`docs/development.rst`](docs/development.rst)。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
 
 ## 安装
 
 **Python 3.11+**
 
+`dev/32ch` 的开发 wheel 从分支 CI artifacts 获取或按下文构建；正式版本 tag 发布后才出现在 Releases。
+
 从 [Release](https://github.com/Omni-Intel/omnibci-python/releases/latest) 下载匹配平台的 wheel 后安装：
 
 ```sh
-python -m pip install path/to/omnibci-0.1.2-cp311-abi3-win_amd64.whl
+python -m pip install path/to/omnibci-0.2.0-cp311-abi3-win_amd64.whl
 ```
 
 串口需要系统识别设备及相应驱动/访问权限。BLE 需要蓝牙适配器；Linux 使用 BlueZ/D-Bus，macOS 需要终端或 Python 宿主的蓝牙权限。关闭其他占用板子的 GUI/程序后再连接。
@@ -86,17 +120,21 @@ with Board.connect("serial://COM5") as board:
 
 | `SampleBatch` 字段 | 类型 / 含义 |
 | --- | --- |
-| `eeg_uv` | float32，`(N, 8)`，按每通道增益换算的微伏 |
-| `raw_counts` | int32，`(N, 8)`，ADS1299 有符号 24 位原始值 |
+| `eeg_uv` | float32，`(N, C)`，按每通道增益换算的微伏 |
+| `raw_counts` | int32，`(N, C)`，ADS1299 有符号 24 位原始值 |
 | `sequence` | uint32，`(N,)`，设备序号 |
 | `valid` | bool，`(N,)`，固件有效标志；不会自动剔除无效行 |
 | `sample_indices` | uint64，`(N,)`，本次采集内的序号时间轴，丢包留下间隔 |
-| `status` | uint8，`(N, 3)`，ADS 状态字节 |
+| `status` | uint8，`(N, S)`，ADS 状态字节 |
+| `source_timestamp_us` | uint32，`(N,)`，STM32 DRDY 设备微秒时间低 32 位 |
+| `source_timestamp_valid` | bool，`(N,)`，源时间是否可用；ESP32 当前全为 false |
 | `mode` | uint8，`(N,)`，固件模式编号 |
 | `generation` | 每次成功开始采集后的会话代数 |
 | `sample_rate_hz` | 250 |
 | `sample_time_s` | 由 sample_indices / sample_rate_hz 计算的相对时间 |
 | `received_at` | 主机 `time.monotonic()` 时间轴上的近似 SDK 交付时间；合批时取最后一批，非硬件采样时间 |
+
+表中 C 为 8（ESP32）或 32（STM32），S 为 3 或 12。源时间不可用时值为 0、掩码为 false；0 配合 true 是合法回绕值，相邻差值按模 `2^32` 计算。STM32 硬件事件通过 `board.read_triggers()` 独立读取，不能只读 EEG 而忽略事件队列，见[触发指南](docs/trigger.rst)。
 
 `stop()` 保留已接收但尚未读取的尾部样本；新的 `start()` 清空上一次采集缓存。Rust 队列有界（128 批），消费过慢导致溢出时会报告故障，不静默覆盖旧数据。
 
@@ -121,29 +159,45 @@ timeout 单位秒，范围 `(0, 60]`。一次固定长度读取共用一个超�
 中文文档：[`docs/index.rst`](docs/index.rst)。
 
 ```sh
-python -m pip install -r docs/requirements.txt
-python -m sphinx -n -W --keep-going -b html docs docs/_build/html
+uv sync --locked --all-extras
+uv run --no-sync python -m sphinx -n -W --keep-going -b html docs docs/_build/html
 ```
 
 生成入口：`docs/_build/html/index.html`。构建与维护说明见 [`docs/development.rst`](docs/development.rst)。
 
 ## 开发
 
-使用 uv 时可运行`uv python install` 和 `uv venv` 创建开发环境；包本身支持 CPython 3.11 及以上版本。
+使用本仓库提交的 `uv.lock` 创建独立环境；包支持 CPython 3.11 及以上版本。
 
 ```sh
-git clone --recurse-submodules git@github.com:Omni-Intel/omnibci-python.git
+git clone --branch dev/32ch --recurse-submodules https://github.com/Omni-Intel/omnibci-python.git
 cd omnibci-python
-git switch master
-python -m venv .venv
-# 激活 .venv 后
-python -m pip install "maturin>=1.15,<2" numpy pytest
-maturin develop
-python -m pytest -q
+uv sync --locked --all-extras
+uv run --no-sync maturin develop
+uv run --no-sync python -m pytest -q
+cargo test --locked
 cargo fmt --check
 cargo clippy --locked -- -D warnings
-maturin build --release --locked --out dist
-maturin sdist --out dist
+uv run --no-sync maturin build --release --locked --out dist
+uv run --no-sync maturin sdist --out dist
 ```
 
 源码构建需要 Rust/Cargo（建议最新 stable），Windows 需要 MSVC C++ Build Tools；Linux 需要 pkg-config、libudev-dev、libdbus-1-dev。
+
+## Serial trigger dispatch
+
+`TriggerController` uses the shared Rust SDK (`trigger` feature):
+
+```python
+from omnibci import TriggerController
+print(TriggerController.available_ports())  # candidates, not verified generators
+with TriggerController.connect("COM23", timeout=1.0) as trigger:
+    trigger.send(7)  # integer code 0..255; 10000 baud, 8N1
+```
+
+A successful send confirms host dispatch only, not device reception. Write failures
+close the underlying port. Repeated codes and code zero are valid. Context exit closes
+the port, including when the experiment raises an exception. Device trigger timestamp
+reception is a separate API; this sending interface does not synthesize event times.
+
+硬件事件读取、设备源时间、双队列示例及验证范围见[触发指南](docs/trigger.rst)。

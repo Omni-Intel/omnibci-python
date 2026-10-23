@@ -217,6 +217,39 @@ def test_context_close_idempotent_and_operations_rejected():
         board.start()
 
 
+def test_device_metadata_components_are_typed(monkeypatch):
+    fake = FakeDevice()
+    snapshot = json.loads(fake.snapshot_json())
+    snapshot["metadata"]["stm32"] = dict(
+        version="32.1.0",
+        revision="012345abcdef",
+        dirty=True,
+        state="available",
+        protocol="EEG V3 · Control V1",
+    )
+    snapshot["metadata"]["e73"] = None
+    monkeypatch.setattr(fake, "snapshot_json", lambda: json.dumps(snapshot))
+    metadata = o.Board(fake).info
+    assert "ComponentFirmware" in o.__all__
+    assert metadata.stm32 == o.ComponentFirmware(
+        version="32.1.0",
+        revision="012345abcdef",
+        dirty=True,
+        state="available",
+        protocol="EEG V3 · Control V1",
+    )
+    assert metadata.e73 is None
+    assert metadata.firmware == "1"
+    assert metadata.hardware == "ADS1299"
+
+
+def test_legacy_device_metadata_without_components_remains_valid():
+    metadata = o.Board(FakeDevice()).info
+    assert metadata == o.DeviceMetadata(firmware="1", hardware="ADS1299", protocol="1")
+    assert metadata.stm32 is None
+    assert metadata.e73 is None
+
+
 def test_cleanup_does_not_hide_original_exception():
     fake = FakeDevice()
     fake.close_error = o.TransportError("close failed")

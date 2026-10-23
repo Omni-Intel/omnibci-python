@@ -1,6 +1,8 @@
 发现与采集
 ==========
 
+本页示例默认 ESP32 八导；STM32 32 导 BLE／串口入口见 :doc:`stm32`。
+
 USB 串口
 --------
 
@@ -89,8 +91,12 @@ BLE key 是平台相关标识，不能用 MAC 地址代替。
        valid=batch.valid,
        sequence=batch.sequence,
        sample_indices=batch.sample_indices,
+       source_timestamp_us=batch.source_timestamp_us,
+       source_timestamp_valid=batch.source_timestamp_valid,
        sample_rate_hz=batch.sample_rate_hz,
        generation=batch.generation,
    )
 
 ``sample_indices`` 和 ``valid`` 分别保留丢包间隔和样本有效标志。
+两个源时间数组保留设备 DRDY 时间及可用性；本页 ESP32 示例当前为全 0 和全
+False。STM32 硬件事件不在 EEG 批次中，需独立读取并保存，见 :doc:`trigger`。
