@@ -65,16 +65,16 @@ Board
 
    .. py:method:: measure_impedance(*, mask: int | None = None, series_kohm: float | None = None, window_seconds: float = 4.0, timeout: float = 15.0) -> ImpedanceResult
 
-      在 STM32 上完成一次 32 导阻抗测量：确认配置、停止采集、关闭 BIAS 回授、
+      在 ESP32 或 STM32 上完成一次 8/32 导阻抗测量：确认配置、停止采集、关闭 BIAS 回授、
       在选中通道开启 31.25 Hz LOFF、采集指定时长（默认 4 秒）、停止并恢复原配置（LOFF 关闭）。
       整个事务持有 Board 锁；返回后设备处于 ready，不自动恢复 EEG。
 
-      :param mask: 32 位通道掩码，与 ``enabled_mask`` 取交集；省略时使用全部已启用通道。
-      :param series_kohm: 串联电阻补偿，默认 9.98 kΩ，有效范围 ``[0, 1000]``。
+      :param mask: 8 或 32 位通道掩码，与 ``enabled_mask`` 取交集；省略时使用全部已启用通道。
+      :param series_kohm: 串联电阻补偿，ESP32 SRB2 默认 4.40 kΩ，其他默认 9.98 kΩ，有效范围 ``[0, 1000]``。
       :param window_seconds: 窗口时长，范围 ``[1, 60]`` 秒，默认 4；按采样点数向上取整。不是稳定等待时间。
       :param timeout: 采集指定时长（默认 4 秒）窗口的最长时间，范围 ``(0, 60]``。
       :raises ValueError: 参数无效，或 mask 未选中任何已启用通道。
-      :raises ConfigurationError: 非 STM32 设备，或模式不允许 LOFF 激励。
+      :raises ConfigurationError: 模式不允许 LOFF 激励。
       :raises InvalidStateError: 配置未确认，或设备状态不允许测量。
       :raises OmniBCIError: 停止、采集或恢复失败。无法确认 LOFF 关闭时，原异常
          附带说明该硬件状态未确认的 note，并关闭 Board。
@@ -287,7 +287,8 @@ ImpedanceResult
    .. py:attribute:: values_kohm
       :type: tuple[float | None, ...]
 
-      32 个通道的阻抗，单位 kΩ。未选中、削顶或有效样本不足 1 秒的通道为 None。
+      8 或 32 个通道的阻抗，长度与设备一致，单位 kΩ。
+      未选中、削顶或有效样本不足 1 秒的通道为 None。
 
    .. py:attribute:: clipped_mask
       :type: int

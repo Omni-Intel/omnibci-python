@@ -8,7 +8,7 @@ use pyo3::{
     create_exception,
     exceptions::PyValueError,
     prelude::*,
-    types::{PyBytes, PyDict},
+    types::{PyBytes, PyDict, PyInt},
 };
 use serde::Deserialize;
 use std::{
@@ -231,6 +231,22 @@ impl NativeDevice {
         let timeout = duration(timeout)?;
         self.with(py, |d| d.configure(config_json, timeout))
     }
+    /// Enable or disable LOFF; success requires a fresh SDK readback confirmation.
+    fn set_lead_off(&self, py: Python<'_>, mask: &Bound<'_, PyAny>, timeout: f64) -> PyResult<()> {
+        if !mask.is_exact_instance_of::<PyInt>() {
+            return Err(PyValueError::new_err("mask must be an integer in [0, 255]"));
+        }
+        let mask = mask
+            .extract::<u8>()
+            .map_err(|_| PyValueError::new_err("mask must be an integer in [0, 255]"))?;
+        let timeout = duration(timeout)?;
+        self.with(py, |d| match d {
+            Backend::Esp32(device) => device.set_lead_off(mask, timeout),
+            Backend::Stm32(_) => Err(Error::InvalidConfig(
+                "use STM32 configuration for LOFF".into(),
+            )),
+        })
+    }
     fn snapshot_json(&self, py: Python<'_>) -> PyResult<String> {
         self.with(py, |d| Ok(d.snapshot_json()))
     }
@@ -408,7 +424,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "e1f25b3a6d272e5040929c53b331d45738ff6d73")?;
+    m.add("SDK_REVISION", "6052d32ba71c31411f7c8bfca8fa32f7a600ac0d")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",

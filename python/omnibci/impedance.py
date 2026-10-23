@@ -22,6 +22,8 @@ DEFAULT_SERIES_KOHM = 9.98
 WINDOW_SECONDS = 4
 MIN_VALID_SAMPLES_PER_SECOND = 1
 CHANNELS = 32
+LEAD_OFF_SERIES_SRB1_KOHM = 9.98
+LEAD_OFF_SERIES_SRB2_KOHM = 4.40
 FULL_SCALE_MIN = -0x800000
 FULL_SCALE_MAX = 0x7FFFFF
 _MAX_SERIES_KOHM = 1000.0
@@ -79,14 +81,17 @@ def estimate_impedance_kohm(
     usable = np.asarray(valid, dtype=bool)
     if (
         values.ndim != 2
-        or values.shape[1] != CHANNELS
+        or values.shape[1] not in (8, 32)
         or counts.shape != values.shape
         or indices.shape != (values.shape[0],)
         or usable.shape != (values.shape[0],)
     ):
-        raise ValueError("impedance window arrays do not share a 32-channel shape")
-    if type(mask) is not int or not 0 <= mask <= 0xFFFFFFFF:
-        raise ValueError("mask must be an integer in [0, 4294967295]")
+        raise ValueError(
+            "impedance window arrays do not share an 8- or 32-channel shape"
+        )
+    channels = values.shape[1]
+    if type(mask) is not int or not 0 <= mask < (1 << channels):
+        raise ValueError(f"mask must be an integer in [0, {(1 << channels) - 1}]")
     if (
         isinstance(series_kohm, bool)
         or not isinstance(series_kohm, (int, float))
@@ -96,18 +101,18 @@ def estimate_impedance_kohm(
     if type(sample_rate_hz) is not int or sample_rate_hz <= 0:
         raise ValueError("sample_rate_hz must be a positive integer")
     if values.shape[0] == 0:
-        return (None,) * CHANNELS, 0
+        return (None,) * channels, 0
 
     # Full-scale ADS1299 codes reject the channel. Only valid rows count,
     # matching the GUI's window scan.
-    clipped = np.zeros(CHANNELS, dtype=bool)
+    clipped = np.zeros(channels, dtype=bool)
     if usable.any():
         valid_counts = counts[usable]
         clipped = np.any(
             (valid_counts <= FULL_SCALE_MIN) | (valid_counts >= FULL_SCALE_MAX),
             axis=0,
         )
-    clipped_mask = sum(1 << ch for ch in range(CHANNELS) if clipped[ch]) & mask
+    clipped_mask = sum(1 << ch for ch in range(channels) if clipped[ch]) & mask
 
     first = int(indices[0])
     # Differences stay small inside one window; the mask keeps u32 wrap.
@@ -116,8 +121,8 @@ def estimate_impedance_kohm(
     basis = np.column_stack((np.sin(phase), np.cos(phase), np.ones_like(phase)))
 
     minimum_samples = sample_rate_hz * MIN_VALID_SAMPLES_PER_SECOND
-    output: list[float | None] = [None] * CHANNELS
-    for channel in range(CHANNELS):
+    output: list[float | None] = [None] * channels
+    for channel in range(channels):
         if mask & (1 << channel) == 0 or clipped_mask & (1 << channel):
             continue
         keep = usable & np.isfinite(values[:, channel])

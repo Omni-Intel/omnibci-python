@@ -341,8 +341,10 @@ def test_measure_impedance_rejects_bad_arguments_and_modes():
     ):
         with pytest.raises(ValueError):
             board.measure_impedance(**kwargs)
-    with pytest.raises(o.ConfigurationError):
-        o.Board(FakeDevice(state="ready"), "esp32").measure_impedance()
+    mismatched = o.Board(FakeDevice(state="ready"), "esp32")
+    mismatched.get_config = lambda: DEFAULT_CONFIG
+    with pytest.raises(o.InvalidStateError):
+        mismatched.measure_impedance()
     shorted = o.Stm32Config(
         mode="shorted", enabled_mask=1, bias_mask=0, gains=(24,) * 32
     )
