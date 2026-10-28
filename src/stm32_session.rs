@@ -17,12 +17,55 @@ use std::{
 type Result<T> = std::result::Result<T, Error>;
 const SAMPLE_CAPACITY: usize = 128;
 const TRIGGER_CAPACITY: usize = 16_384;
+/// Upper bound on post-fault LOFF cleanup. Acquisition is stopped immediately;
+/// the link is released even if the device never confirms the disable.
+const LOFF_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 enum Action {
     Start,
     Stop,
     Configure(Configuration),
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CleanupPhase {
+    Stopping,
+    Disabling,
+    Done,
+    Failed,
+}
+
+/// Bounded post-fault cleanup of excitation that may still be enabled. It runs
+/// after the primary fault, so it never clears that fault or revives the session.
+#[derive(Clone)]
+struct Cleanup {
+    phase: CleanupPhase,
+    stop_sent: bool,
+    disable: Option<Configuration>,
+    disable_sent: bool,
+    deadline: Instant,
+    failure: Option<Error>,
+}
+
+impl Cleanup {
+    fn new(now: Instant) -> Self {
+        Self {
+            phase: CleanupPhase::Stopping,
+            stop_sent: false,
+            disable: None,
+            disable_sent: false,
+            deadline: now + LOFF_CLEANUP_TIMEOUT,
+            failure: None,
+        }
+    }
+    fn fail(&mut self, error: Error) {
+        if self.failure.is_none() {
+            self.failure = Some(error);
+        }
+        self.phase = CleanupPhase::Failed;
+    }
+}
+
 struct Core {
     state: State,
     config: Option<Configuration>,
@@ -44,6 +87,9 @@ struct Core {
     disconnected: bool,
     closing: bool,
     loff_may_be_on: bool,
+    cleanup: Option<Cleanup>,
+    stale_stop_acks: usize,
+    stale_configure_acks: usize,
 }
 impl Default for Core {
     fn default() -> Self {
@@ -68,17 +114,133 @@ impl Default for Core {
             disconnected: false,
             closing: false,
             loff_may_be_on: false,
+            cleanup: None,
+            stale_stop_acks: 0,
+            stale_configure_acks: 0,
         }
     }
 }
 impl Core {
     fn fault(&mut self, error: Error) {
         if self.error.is_none() {
+            // ACKs for controls still in flight when the fault occurs belong to
+            // the failed generation and cannot confirm post-fault cleanup.
+            match &self.pending {
+                Some(Action::Stop) => self.stale_stop_acks += 1,
+                Some(Action::Configure(_)) => self.stale_configure_acks += 1,
+                _ => {}
+            }
             self.error = Some(error);
         }
         self.state = State::Faulted;
         self.pending = None;
         self.control_deadline = None;
+    }
+
+    fn cleanup_phase(&self) -> Option<CleanupPhase> {
+        self.cleanup.as_ref().map(|cleanup| cleanup.phase)
+    }
+
+    /// Start the bounded LOFF cleanup at most once per faulted session. A fault
+    /// that may have left excitation on must stop acquisition and disable LOFF
+    /// before the transport is released.
+    fn start_cleanup(&mut self, now: Instant) {
+        if self.error.is_some()
+            && self.loff_may_be_on
+            && !self.disconnected
+            && self.cleanup.is_none()
+        {
+            self.cleanup = Some(Cleanup::new(now));
+        }
+    }
+
+    /// Next cleanup command to submit. Marking it in flight keeps the worker
+    /// and close from issuing the same cleanup step twice.
+    fn cleanup_command(&mut self) -> Option<Command> {
+        let cleanup = self.cleanup.as_mut()?;
+        match cleanup.phase {
+            CleanupPhase::Stopping if !cleanup.stop_sent => {
+                cleanup.stop_sent = true;
+                Some(Command::StopAndDrain)
+            }
+            CleanupPhase::Disabling if !cleanup.disable_sent => {
+                let disable = cleanup.disable.clone()?;
+                cleanup.disable_sent = true;
+                Some(Command::ConfigureStm32(disable))
+            }
+            _ => None,
+        }
+    }
+
+    /// The submitter could not enqueue the command; allow a later attempt.
+    fn cleanup_unsent(&mut self) {
+        if let Some(cleanup) = &mut self.cleanup {
+            match cleanup.phase {
+                CleanupPhase::Stopping => cleanup.stop_sent = false,
+                CleanupPhase::Disabling => cleanup.disable_sent = false,
+                _ => {}
+            }
+        }
+    }
+
+    fn fail_cleanup(&mut self, error: Error) {
+        let Some(cleanup) = &mut self.cleanup else {
+            return;
+        };
+        cleanup.fail(error.clone());
+        self.record_cleanup(error);
+    }
+
+    fn expire_cleanup(&mut self, now: Instant) {
+        let expired = self.cleanup.as_ref().is_some_and(|cleanup| {
+            matches!(
+                cleanup.phase,
+                CleanupPhase::Stopping | CleanupPhase::Disabling
+            ) && now >= cleanup.deadline
+        });
+        if expired {
+            self.fail_cleanup(Error::Timeout);
+        }
+    }
+
+    fn cleanup_finished(&self) -> bool {
+        matches!(
+            self.cleanup_phase(),
+            Some(CleanupPhase::Done | CleanupPhase::Failed)
+        )
+    }
+
+    fn cleanup_stop_confirmed(&mut self) {
+        let config = self.config.clone();
+        let Some(cleanup) = &mut self.cleanup else {
+            return;
+        };
+        let Some(mut disable) = config else {
+            cleanup.fail(Error::InvalidState);
+            return;
+        };
+        disable.loff = 0;
+        cleanup.disable = Some(disable);
+        cleanup.phase = CleanupPhase::Disabling;
+    }
+
+    fn cleanup_disable_confirmed(&mut self, config: Configuration) {
+        let matched = self
+            .cleanup
+            .as_ref()
+            .and_then(|cleanup| cleanup.disable.as_ref())
+            .is_some_and(|disable| disable == &config);
+        if !matched || config.loff != 0 {
+            self.fail_cleanup(Error::InvalidConfig(
+                "STM32 LOFF disable ACK does not match request".into(),
+            ));
+            return;
+        }
+        if let Some(cleanup) = &mut self.cleanup {
+            cleanup.phase = CleanupPhase::Done;
+        }
+        self.config = Some(config);
+        self.loff_may_be_on = false;
     }
     /// Keep the first distinct cleanup report for close diagnostics. The
     /// primary fault remains in `error`; an identical report is not repeated.
@@ -122,16 +284,65 @@ impl Core {
             self.fault(Error::Timeout);
         }
         // A timeout invalidates the control generation. No late ACK can revive it.
+        // Post-fault LOFF cleanup may consume only the cleanup generation's ACKs;
+        // late ACKs from failed normal controls are ignored and never change state.
         if self.error.is_some() {
             match event {
-                Event::Disconnected => self.disconnected = true,
-                // Cleanup diagnostics survive an earlier fault without changing
-                // state or masking the primary error.
-                Event::Stm32Stopped(Err(error)) if self.closing => {
-                    self.record_cleanup(Error::Transport(error));
+                Event::Disconnected => {
+                    self.disconnected = true;
+                    if self.cleanup_phase().is_some_and(|phase| {
+                        matches!(phase, CleanupPhase::Stopping | CleanupPhase::Disabling)
+                    }) {
+                        self.fail_cleanup(Error::Disconnected);
+                    }
                 }
-                Event::Error(message) if self.closing => {
-                    self.record_cleanup(Error::Transport(message));
+                Event::Stm32Stopped(result) => {
+                    if self.stale_stop_acks > 0 {
+                        // Consume pre-fault responses regardless of the current
+                        // cleanup phase; the driver delivers controls in order.
+                        self.stale_stop_acks -= 1;
+                    } else if self.cleanup.as_ref().is_some_and(|cleanup| {
+                        cleanup.phase == CleanupPhase::Stopping && cleanup.stop_sent
+                    }) {
+                        match result {
+                            Ok(()) => self.cleanup_stop_confirmed(),
+                            Err(error) => self.fail_cleanup(Error::Transport(error)),
+                        }
+                    } else if self.closing
+                        && let Err(error) = result
+                    {
+                        // Cleanup diagnostics survive an earlier fault without
+                        // changing state or masking the primary error.
+                        self.record_cleanup(Error::Transport(error));
+                    }
+                }
+                Event::Stm32Configured(result) => {
+                    if self.stale_configure_acks > 0 {
+                        // Consume pre-fault responses regardless of the current
+                        // cleanup phase; the driver delivers controls in order.
+                        self.stale_configure_acks -= 1;
+                    } else if self.cleanup.as_ref().is_some_and(|cleanup| {
+                        cleanup.phase == CleanupPhase::Disabling && cleanup.disable_sent
+                    }) {
+                        match result {
+                            Ok(config) => self.cleanup_disable_confirmed(config),
+                            Err(error) => self.fail_cleanup(Error::Transport(error)),
+                        }
+                    } else if self.closing
+                        && let Err(error) = result
+                    {
+                        self.record_cleanup(Error::Transport(error));
+                    }
+                }
+                Event::Error(message) => {
+                    if self.cleanup_phase().is_some_and(|phase| {
+                        matches!(phase, CleanupPhase::Stopping | CleanupPhase::Disabling)
+                    }) {
+                        self.fail_cleanup(Error::Transport(message.clone()));
+                    }
+                    if self.closing {
+                        self.record_cleanup(Error::Transport(message));
+                    }
                 }
                 _ => {}
             }
@@ -143,10 +354,13 @@ impl Core {
             }
             Event::DeviceMetadata(metadata) => self.metadata = Some(metadata),
             Event::Stm32Configured(result) => {
+                // The response is consumed even when it reports failure, so a
+                // later fault must not treat it as an in-flight stale ACK.
+                let pending = self.pending.take();
                 let config = result.map_err(Error::InvalidConfig)?;
                 config.validate().map_err(Error::InvalidConfig)?;
-                match &self.pending {
-                    Some(Action::Configure(expected)) if expected == &config => self.pending = None,
+                match pending {
+                    Some(Action::Configure(expected)) if expected == config => {}
                     Some(_) => {
                         return Err(Error::InvalidConfig(
                             "STM32 configuration ACK does not match request".into(),
@@ -164,6 +378,7 @@ impl Core {
                 self.config = Some(config);
             }
             Event::Stm32Started(result) if matches!(self.pending, Some(Action::Start)) => {
+                self.pending = None;
                 result.map_err(Error::Transport)?;
                 self.queue.clear();
                 self.triggers.clear();
@@ -174,12 +389,11 @@ impl Core {
                 self.missing = 0;
                 self.generation += 1;
                 self.state = State::Streaming;
-                self.pending = None;
             }
             Event::Stm32Stopped(result) if matches!(self.pending, Some(Action::Stop)) => {
+                self.pending = None;
                 result.map_err(Error::Transport)?;
                 self.state = State::Ready;
-                self.pending = None;
             }
             // A failed Disconnect stop leaves the latest SDK driver running until
             // Shutdown. Its best-effort cleanup report must not vanish during close.
@@ -332,8 +546,19 @@ impl Device {
                 }
                 // Retry fault cleanup without filling the bounded queue: keep at
                 // most one request pending and add none while close owns cleanup.
+                // Excitation that may still be on is stopped and disabled before
+                // the link is released, even if the caller never calls close.
                 if core.error.is_some() && !core.closing && control.is_empty() {
-                    let _ = control.try_send(Command::Disconnect);
+                    let now = Instant::now();
+                    core.start_cleanup(now);
+                    core.expire_cleanup(now);
+                    if let Some(command) = core.cleanup_command() {
+                        if control.try_send(command).is_err() {
+                            core.cleanup_unsent();
+                        }
+                    } else if !core.loff_may_be_on || core.cleanup_finished() {
+                        let _ = control.try_send(Command::Disconnect);
+                    }
                 }
                 state.changed.notify_all();
                 if core.disconnected {
@@ -396,9 +621,14 @@ impl Device {
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                // LOFF cleanup must own the transport; disconnect is safe only
+                // when excitation cannot be on.
+                let disconnect = !core.loff_may_be_on;
                 core.fault(Error::Timeout);
                 self.shared.changed.notify_all();
-                let _ = self.send(Command::Disconnect);
+                if disconnect {
+                    let _ = self.send(Command::Disconnect);
+                }
                 return Err(Error::Timeout);
             }
             core = self
@@ -421,7 +651,11 @@ impl Device {
             command
         };
         if let Err(error) = self.send(command) {
-            self.shared.core.lock().unwrap().fault(error.clone());
+            // The command never reached the driver, so no ACK for it can arrive.
+            let mut core = self.shared.core.lock().unwrap();
+            core.pending = None;
+            core.control_deadline = None;
+            core.fault(error.clone());
             return Err(error);
         }
         self.wait(deadline, |core| core.pending.is_none())
@@ -480,6 +714,60 @@ impl Device {
             .map(|m| crate::metadata_json(m.clone()));
         serde_json::json!({"state":format!("{:?}",core.state).to_lowercase(),"config":config,"metadata":metadata,"generation":core.generation,"samples":core.samples,"missing_samples":core.missing,"crc_errors":core.crc,"ble":{},"error":core.error.as_ref().map(ToString::to_string)}).to_string()
     }
+    /// Drive the post-fault LOFF cleanup to completion within `deadline`. The
+    /// worker usually starts it; close may submit the next step sooner and also
+    /// bounds a faulted session whose cleanup is still waiting for an ACK.
+    fn drive_fault_cleanup(&self, deadline: Instant) {
+        {
+            let Ok(mut core) = self.shared.core.lock() else {
+                return;
+            };
+            core.start_cleanup(Instant::now());
+        }
+        loop {
+            let command = {
+                let Ok(mut core) = self.shared.core.lock() else {
+                    return;
+                };
+                let now = Instant::now();
+                core.expire_cleanup(now);
+                core.cleanup_command()
+            };
+            if let Some(command) = command {
+                if let Err(error) = self.send_before(command, deadline) {
+                    if let Ok(mut core) = self.shared.core.lock() {
+                        core.fail_cleanup(error);
+                    }
+                    return;
+                }
+                continue;
+            }
+            let finished = {
+                let Ok(core) = self.shared.core.lock() else {
+                    return;
+                };
+                core.cleanup_finished() || core.disconnected
+            };
+            if finished {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                if let Ok(mut core) = self.shared.core.lock() {
+                    core.fail_cleanup(Error::Timeout);
+                }
+                return;
+            }
+            let Ok(core) = self.shared.core.lock() else {
+                return;
+            };
+            let _ = self
+                .shared
+                .changed
+                .wait_timeout(core, remaining.min(Duration::from_millis(10)));
+        }
+    }
+
     pub fn close(&mut self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         let mut result = Ok(());
@@ -497,6 +785,16 @@ impl Device {
                 config.loff = 0;
                 result = self.configure(config, deadline.saturating_duration_since(Instant::now()));
             }
+        }
+        // The session may have faulted before close or while stopping above.
+        // When excitation may still be on, attempt a bounded confirmed stop and
+        // LOFF disable despite the primary fault, before Disconnect.
+        let (faulted, loff_may_be_on, disconnected) = {
+            let core = self.shared.core.lock().map_err(|_| Error::WorkerPanicked)?;
+            (core.error.is_some(), core.loff_may_be_on, core.disconnected)
+        };
+        if faulted && loff_may_be_on && !disconnected {
+            self.drive_fault_cleanup(deadline);
         }
         self.shared
             .core
@@ -696,6 +994,42 @@ mod tests {
         assert_eq!(state.state, State::Faulted);
         assert_eq!(state.error, Some(Error::Disconnected));
     }
+    #[test]
+    fn stale_stop_ack_cannot_confirm_cleanup_stop() {
+        let mut state = Core {
+            state: State::Streaming,
+            config: Some(Configuration {
+                loff: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        state.loff_may_be_on = true;
+        state.begin(Action::Stop).unwrap();
+        state.fault(Error::Timeout);
+        state.start_cleanup(Instant::now());
+        assert!(matches!(
+            state.cleanup_command(),
+            Some(Command::StopAndDrain)
+        ));
+        // The pre-fault stop's late ACK cannot confirm the cleanup stop.
+        state.event(Event::Stm32Stopped(Ok(()))).unwrap();
+        assert_eq!(state.cleanup_phase(), Some(CleanupPhase::Stopping));
+        state.event(Event::Stm32Stopped(Ok(()))).unwrap();
+        assert_eq!(state.cleanup_phase(), Some(CleanupPhase::Disabling));
+        assert_eq!(
+            state
+                .cleanup
+                .as_ref()
+                .unwrap()
+                .disable
+                .as_ref()
+                .unwrap()
+                .loff,
+            0
+        );
+        assert_eq!(state.error, Some(Error::Timeout));
+    }
 }
 #[cfg(test)]
 mod integration_tests {
@@ -888,6 +1222,210 @@ mod integration_tests {
             Error::Disconnected
         );
     }
+    fn wait_until(deadline: Instant, mut ready: impl FnMut() -> bool) {
+        while Instant::now() < deadline {
+            if ready() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("condition not reached before deadline");
+    }
+    fn loff_on_config() -> Configuration {
+        Configuration {
+            loff: 1,
+            ..Default::default()
+        }
+    }
+    /// Overflow while streaming with LOFF on must stop acquisition promptly,
+    /// confirm LOFF off, and only then release the transport. The original
+    /// overflow is still reported and no unconfirmed-excitation warning remains.
+    #[test]
+    fn prior_overflow_with_loff_on_confirms_stop_and_disable_before_disconnect() {
+        let (log_tx, log_rx) = std::sync::mpsc::channel();
+        let (mut device, events) = simulated(move |command, events| {
+            log_tx.send(command.clone()).unwrap();
+            acknowledge(command, events);
+        });
+        device
+            .configure(loff_on_config(), Duration::from_secs(1))
+            .unwrap();
+        device.start(Duration::from_secs(1)).unwrap();
+        for sequence in 0..=SAMPLE_CAPACITY {
+            events.send(Event::Bytes(packet(sequence as u32))).unwrap();
+        }
+        wait_until(Instant::now() + Duration::from_secs(1), || {
+            device.shared.core.lock().unwrap().error == Some(Error::Overflow)
+        });
+        // The worker stops acquisition without waiting for the caller to close.
+        let mut log = Vec::new();
+        loop {
+            let command = log_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("worker must stop acquisition after the fault");
+            log.push(command.clone());
+            if matches!(command, Command::StopAndDrain) {
+                break;
+            }
+        }
+        wait_until(Instant::now() + Duration::from_secs(1), || {
+            device.shared.core.lock().unwrap().cleanup_phase() == Some(CleanupPhase::Done)
+        });
+        let error = device
+            .close(Duration::from_secs(1))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Overflow"), "{error}");
+        assert!(!error.contains("could not be confirmed"), "{error}");
+        while let Ok(command) = log_rx.try_recv() {
+            log.push(command);
+        }
+        let stop = log
+            .iter()
+            .position(|command| matches!(command, Command::StopAndDrain))
+            .expect("cleanup stop");
+        let disable = log
+            .iter()
+            .position(
+                |command| matches!(command, Command::ConfigureStm32(config) if config.loff == 0),
+            )
+            .expect("cleanup LOFF disable");
+        assert!(stop < disable, "disable must follow the stop: {log:?}");
+        let core = device.shared.core.lock().unwrap();
+        assert_eq!(core.error, Some(Error::Overflow));
+        assert!(!core.loff_may_be_on);
+        assert_eq!(core.config.as_ref().unwrap().loff, 0);
+    }
+    /// A lost LOFF-disable ACK must keep the unconfirmed-excitation diagnostic
+    /// and the primary fault, and shutdown must stay bounded.
+    #[test]
+    fn lost_disable_ack_retains_original_fault_and_unconfirmed_loff() {
+        let (log_tx, log_rx) = std::sync::mpsc::channel();
+        let (mut device, events) = simulated(move |command, events| {
+            log_tx.send(command.clone()).unwrap();
+            match &command {
+                // Lose the cleanup acknowledgement; the request was delivered.
+                Command::ConfigureStm32(config) if config.loff == 0 => {}
+                _ => acknowledge(command, events),
+            }
+        });
+        device
+            .configure(loff_on_config(), Duration::from_secs(1))
+            .unwrap();
+        device.start(Duration::from_secs(1)).unwrap();
+        for sequence in 0..=SAMPLE_CAPACITY {
+            events.send(Event::Bytes(packet(sequence as u32))).unwrap();
+        }
+        wait_until(Instant::now() + Duration::from_secs(1), || {
+            device.shared.core.lock().unwrap().error == Some(Error::Overflow)
+        });
+        let started = Instant::now();
+        let error = device
+            .close(Duration::from_millis(250))
+            .unwrap_err()
+            .to_string();
+        assert!(started.elapsed() < Duration::from_secs(1), "{error}");
+        assert!(error.contains("Overflow"), "{error}");
+        assert!(error.contains("LOFF"), "{error}");
+        assert!(error.contains("could not be confirmed"), "{error}");
+        let mut attempted = false;
+        while let Ok(command) = log_rx.try_recv() {
+            if matches!(command, Command::ConfigureStm32(config) if config.loff == 0) {
+                attempted = true;
+            }
+        }
+        assert!(attempted, "close must attempt the LOFF disable");
+        let core = device.shared.core.lock().unwrap();
+        assert_eq!(core.error, Some(Error::Overflow));
+        assert!(core.loff_may_be_on);
+    }
+    /// A late ACK from a normal control that timed out before the fault must not
+    /// confirm the cleanup disable; without a fresh ACK LOFF stays unconfirmed.
+    #[test]
+    fn late_normal_configure_ack_cannot_confirm_cleanup_disable() {
+        let mut withheld = false;
+        let mut stale_ack = None;
+        let (stale_tx, stale_rx) = std::sync::mpsc::channel();
+        let (mut device, _) = simulated(move |command, events| {
+            match &command {
+                Command::ConfigureStm32(config) if config.loff == 0 => {
+                    // The first disable is the normal request whose ACK is late;
+                    // replay it when the cleanup disable arrives, then lose the
+                    // cleanup request's own ACK.
+                    if !withheld {
+                        withheld = true;
+                        stale_ack = Some(config.clone());
+                    } else if let Some(config) = stale_ack.take() {
+                        events.send(Event::Stm32Configured(Ok(config))).unwrap();
+                        stale_tx.send(()).unwrap();
+                    }
+                }
+                _ => acknowledge(command, events),
+            }
+        });
+        device
+            .configure(loff_on_config(), Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            device.configure(
+                Configuration {
+                    loff: 0,
+                    ..Default::default()
+                },
+                Duration::from_millis(5)
+            ),
+            Err(Error::Timeout)
+        );
+        stale_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("driver must replay the stale ACK");
+        wait_until(Instant::now() + Duration::from_secs(1), || {
+            device.shared.core.lock().unwrap().stale_configure_acks == 0
+        });
+        {
+            let core = device.shared.core.lock().unwrap();
+            assert_eq!(core.cleanup_phase(), Some(CleanupPhase::Disabling));
+            assert!(core.loff_may_be_on, "stale ACK must not disable LOFF");
+        }
+        let error = device
+            .close(Duration::from_millis(100))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Timeout"), "{error}");
+        assert!(error.contains("could not be confirmed"), "{error}");
+        assert!(device.shared.core.lock().unwrap().loff_may_be_on);
+    }
+    /// Cleanup that never gets a stop ACK must still release the link within the
+    /// caller's close deadline while retaining the diagnostic.
+    #[test]
+    fn bounded_close_when_cleanup_is_unacknowledged() {
+        let (mut device, events) = simulated(|command, events| match command {
+            Command::StopAndDrain => {}
+            Command::ConfigureStm32(config) if config.loff == 0 => {}
+            _ => acknowledge(command, events),
+        });
+        device
+            .configure(loff_on_config(), Duration::from_secs(1))
+            .unwrap();
+        device.start(Duration::from_secs(1)).unwrap();
+        for sequence in 0..=SAMPLE_CAPACITY {
+            events.send(Event::Bytes(packet(sequence as u32))).unwrap();
+        }
+        wait_until(Instant::now() + Duration::from_secs(1), || {
+            device.shared.core.lock().unwrap().error == Some(Error::Overflow)
+        });
+        let started = Instant::now();
+        let error = device
+            .close(Duration::from_millis(50))
+            .unwrap_err()
+            .to_string();
+        assert!(started.elapsed() < Duration::from_secs(1), "{error}");
+        assert!(error.contains("Overflow"), "{error}");
+        assert!(error.contains("could not be confirmed"), "{error}");
+        let core = device.shared.core.lock().unwrap();
+        assert_eq!(core.error, Some(Error::Overflow));
+        assert!(core.loff_may_be_on);
+    }
 }
 #[cfg(test)]
 mod deadline_tests {
@@ -1033,7 +1571,8 @@ mod uncertain_loff_tests {
             ),
             Err(Error::Timeout)
         );
-        let error = device.close(Duration::from_secs(1)).unwrap_err();
+        // Cleanup is attempted after the fault; lose its ACKs and bound close.
+        let error = device.close(Duration::from_millis(100)).unwrap_err();
         assert!(error.to_string().contains("LOFF"), "{error}");
     }
 }
@@ -1276,5 +1815,72 @@ mod trigger_queue_tests {
         assert_eq!(c.event(Event::Bytes(packets)).unwrap_err(), Error::Overflow);
         assert_eq!(c.triggers.len(), TRIGGER_CAPACITY);
         assert!(c.triggers.iter().all(|e| e.code == 1));
+    }
+}
+
+#[cfg(test)]
+mod cleanup_ack_order_tests {
+    use super::*;
+
+    #[test]
+    fn stale_acks_before_or_during_cleanup_do_not_consume_fresh_confirmation() {
+        for stop in [false, true] {
+            for early in [false, true] {
+                let config = Configuration {
+                    loff: 1,
+                    bias: 0,
+                    ..Default::default()
+                };
+                let mut off = config.clone();
+                off.loff = 0;
+                let mut core = Core {
+                    state: State::Ready,
+                    config: Some(config),
+                    loff_may_be_on: true,
+                    pending: Some(if stop {
+                        Action::Stop
+                    } else {
+                        Action::Configure(off.clone())
+                    }),
+                    ..Default::default()
+                };
+                core.fault(Error::Timeout);
+                if !early {
+                    core.start_cleanup(Instant::now());
+                    assert!(matches!(
+                        core.cleanup_command(),
+                        Some(Command::StopAndDrain)
+                    ));
+                }
+                // The serialized driver can deliver the old configuration ACK
+                // before it processes the cleanup STOP, or before cleanup starts.
+                core.event(if stop {
+                    Event::Stm32Stopped(Ok(()))
+                } else {
+                    Event::Stm32Configured(Ok(off.clone()))
+                })
+                .unwrap();
+                assert!(core.loff_may_be_on);
+                assert_eq!(core.stale_stop_acks, 0);
+                assert_eq!(core.stale_configure_acks, 0);
+                if early {
+                    core.start_cleanup(Instant::now());
+                    assert!(matches!(
+                        core.cleanup_command(),
+                        Some(Command::StopAndDrain)
+                    ));
+                }
+                assert!(core.cleanup_phase() == Some(CleanupPhase::Stopping));
+                core.event(Event::Stm32Stopped(Ok(()))).unwrap();
+                assert!(matches!(
+                    core.cleanup_command(),
+                    Some(Command::ConfigureStm32(_))
+                ));
+                core.event(Event::Stm32Configured(Ok(off))).unwrap();
+                assert!(!core.loff_may_be_on);
+                assert_eq!(core.state, State::Faulted);
+                assert_eq!(core.error, Some(Error::Timeout));
+            }
+        }
     }
 }

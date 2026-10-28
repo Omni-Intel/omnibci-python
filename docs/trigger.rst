@@ -1,8 +1,8 @@
 硬件触发接收与发送
 ==================
 
-本页对应 ``dev/32ch`` 源码，SDK 固定提交为
-``843013ba62f1f05098c8639a657585720ce66a72``。
+本页对应当前源码，SDK 固定提交为
+``54fbad405c05bfef813f7acb323e5f0c73153092``。
 STM32 采集使用板端 Data CDC 或 E73 BLE，当前固件已移除 ESB Dongle 和模式切换。
 外部发送板的串口由 :py:class:`omnibci.TriggerController` 独立持有，
 与采集板的 Data CDC、DFU CDC 均不是同一个端口。安装入口见 :doc:`installation`。
@@ -23,7 +23,7 @@ uint32 anchor_timestamp_us；Python 整数保留全部位数。
 
 样本提供 source_timestamp_us（uint32 DRDY 微秒时间低 32 位）和
 source_timestamp_valid 掩码。不可用时值为 0、掩码为 False；0 配合 True
-是合法回绕值。ESP32 当前不提供此源时间。固定长度读取、切片、合批和离线
+是合法回绕值。SDK 0.3.1 也保留 ESP32 时间字段：0.26.1 为 DRDY 中断入口时间，更早的 serial-v1 固件为组帧时间；可用掩码不保证时间语义。固定长度读取、切片、合批和离线
 解码保留这两个数组；SDK 返回的数组只读。
 
 相邻时间戳差值按模 ``2^32`` 计算，例如
@@ -118,9 +118,7 @@ generation=0 的事件。每次创建独立解析器；CRC 错误和末尾半包
 原始本机证据位于 ``D:/workspace/trigger-validation/cc-bindings``，
 其他机器无法通过此路径访问。
 
-当前 pin 升级的既有验证为 release abi3 扩展构建、22 个原生 Rust 测试、
-66 个 Python 测试（排除硬件）、fmt 与 Clippy。未使用新 SDK 重跑硬件，详见
-:doc:`development`。软件覆盖超过 ``2^53`` 的精确时间、uint32 回绕、重复/零码、
+当前 SDK 0.3.1 的构建、软件测试及 USB/BLE 采集验证见 :doc:`development`；本次未重跑物理触发测试。软件覆盖超过 ``2^53`` 的精确时间、uint32 回绕、重复/零码、
 同锚点多事件、事件单独到达与拆包、有界队列溢出和 stop/start。
 
 相关设备侧测试摘要、固件身份与复现步骤保存在

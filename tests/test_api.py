@@ -294,7 +294,8 @@ def test_nonexistent_port_maps_native_transport_failure():
         "COM9876" if sys.platform == "win32" else "/dev/omnibci-nonexistent-test-port"
     )
     with pytest.raises(o.TransportError):
-        o.Board.connect("serial://" + port, timeout=1)
+        # Exercise OS-error mapping, not worker startup speed on shared CI hosts.
+        o.Board.connect("serial://" + port, timeout=10)
 
 
 def test_sdk_revision_matches_checked_out_source():

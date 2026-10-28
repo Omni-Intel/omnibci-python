@@ -1,8 +1,28 @@
+import binascii
 from pathlib import Path
 
 import numpy as np
 from omnibci import decode_frames, decode_triggers
 from omnibci.api import _combine
+from test_api import frame
+
+
+def test_esp32_source_timestamps_preserve_wrap_zero_and_batch_operations():
+    timestamps = [2**32 - 1, 0, 4000]
+    packets = []
+    for sequence, timestamp in enumerate(timestamps):
+        packet = bytearray(frame(sequence))
+        packet[8:12] = timestamp.to_bytes(4, "little")
+        packet[46:] = binascii.crc_hqx(packet[:46], 0xFFFF).to_bytes(2, "little")
+        packets.append(bytes(packet))
+    batch = decode_frames(b"".join(packets))
+    assert batch.source_timestamp_us.dtype == np.uint32
+    assert batch.source_timestamp_us.tolist() == timestamps
+    assert batch.source_timestamp_valid.tolist() == [True, True, True]
+    assert not batch.source_timestamp_us.flags.writeable
+    joined = _combine([batch._slice(0, 1), batch._slice(1, None)])
+    np.testing.assert_array_equal(joined.source_timestamp_us, timestamps)
+    assert joined.source_timestamp_valid.all()
 
 
 def test_exact_trigger_timestamps_and_multiple_events_per_anchor():
