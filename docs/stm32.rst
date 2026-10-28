@@ -136,11 +136,8 @@ EEG 与事件队列。源时间、回绕、事件关联、32.2.4 时钟就绪条
 --------
 
 本分支固定到 ``omnibci-sdk`` 的 ``master`` 分支提交
-``843013ba62f1f05098c8639a657585720ce66a72``。该基线提供 STM32/E73 组件固件信息。
-本次 SDK 升级保持公开 Python API 与包版本 0.2.0 不变，只重新构建并运行离线测试，
-未重跑新 SDK 的实机采集；具体结果见 ``docs/development.rst``。旧 SDK
-``aa9ab512ecf6243646fbbb23e9432e3c79eac1ec`` 下的 STM32 32.2.3 短时实机结果见
-:doc:`trigger`，不能作为新固定提交的硬件证据。
+``54fbad405c05bfef813f7acb323e5f0c73153092``。该基线提供 STM32/E73 组件固件信息。
+本次 SDK 升级保持公开 Python API 与包版本 0.2.0 不变；离线测试与 USB 短时采集结果见 :doc:`development`。旧 SDK ``aa9ab512ecf6243646fbbb23e9432e3c79eac1ec`` 下的 STM32 32.2.3 触发测试见 :doc:`trigger`，不能作为当前提交的触发验证证据。
 ``close()`` 返回不表示 Windows 已完成底层 BLE 资源清理；后续连接仍需等待 SDK
 清理门控。若系统清理持续阻塞，新连接会报告错误，可能需要重启 Python 进程。
 这不提供 Python 会话自动重连，也不代表 BLE ATT ACK 超时根因已经解决。

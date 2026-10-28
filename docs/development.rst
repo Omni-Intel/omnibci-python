@@ -33,12 +33,11 @@
 SDK 升级验证
 ------------
 
-本次只更新 SDK 固定提交并重新构建，公开 Python API 与包版本 0.2.0 不变，未连接硬件。
-``cargo test --locked`` 的 22 个原生 Rust 测试通过；release abi3 扩展重新构建成功，
-并通过 66 个 Python 测试（排除硬件测试）。``cargo fmt --check`` 与
-``cargo clippy --locked -- -D warnings`` 通过。
-未使用新 SDK 重跑实机测试；旧 SDK 基线下的 STM32 32.2.3 结果见
-:doc:`trigger`，不能作为新固定提交的硬件证据。
+2026-10-29 升级到 SDK 0.3.1，固定提交 ``54fbad405c05bfef813f7acb323e5f0c73153092``。公开 Python API 与包版本 0.2.0 保持不变。阻抗测量继续使用停采、配置、采集及恢复流程；此次升级不新增自动型号识别或 live-LOFF 的 Python 参数。
+
+Windows 上 ``cargo test --locked`` 的 28 个原生测试及重新构建扩展后的 173 个 Python 离线测试通过；``cargo fmt --check``、严格 Clippy、Ruff 检查和格式检查通过。release abi3 wheel 与 sdist 构建及内容审计通过；wheel 在独立 Python 3.11 环境安装后，SDK 版本和 revision 与源码一致。固定 SDK 的 176 个单元测试和 10 个集成测试通过。
+
+使用本次构建连接 COM25 STM32 32.3.0 USB 32 导和 COM8 ESP32 dual-stack_v0.25.4 USB 8 导，分别完成配置确认、250 样本读取、数据形状检查、停止和关闭。另通过 ESP32 0.26.1（44:B1:76:47:32:7A）和 STM32 32.3.0 / E73 0.6.0（CD:FB:E9:DC:82:6E）的 BLE 发现、配置确认、250 样本读取、停止和关闭。该短时检查不覆盖阻抗激励、触发器或长时稳定性，也不代表 Linux/macOS 验收。历史触发测试见 :doc:`trigger`。
 
 源码与发布
 ----------
@@ -62,3 +61,8 @@ Sphinx 只验证文档语法和交叉引用，不替代采集测试。
 ``python/omnibci/__init__.py`` 的导出、实际 Python 签名和 ``_native.pyi``。
 本项目使用原生 RST；新增页面必须加入 ``index.rst`` 的 toctree。
 ``trigger.md`` 仅保留旧链接入口，正文在 :doc:`trigger`，不应在两处维护副本。
+
+故障后的激励清理
+----------------
+
+STM32/E73 会话在可能开启 LOFF 时发生故障，会先尝试确认停止，再提交 LOFF=0 配置并等待匹配确认，之后释放连接。后台清理上限为 10 秒，显式关闭还受调用者超时限制。原始故障始终保留，清理不能恢复采集；若连接已断或确认缺失，仍报告激励关闭未确认。回归测试覆盖队列溢出、丢失确认、清理前及清理期间到达的旧 ACK，以及关闭期限。CC 使用 DeepSeek deepseek-flash[1m] 参与审查和实现，Codex 复核并修复 ACK 顺序边界。
