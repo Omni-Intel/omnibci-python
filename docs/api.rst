@@ -362,14 +362,14 @@ SampleBatch
    .. py:attribute:: source_timestamp_us
       :type: NDArray
 
-      uint32，形状 ``(N,)``，STM32 DRDY 设备微秒时间的低 32 位；不可用时为 0。
+      uint32，形状 ``(N,)``，设备微秒时间的低 32 位；不可用时为 0。
       必须结合 source_timestamp_valid 判断，0 可以是有效回绕值。
-      相邻差值按模 ``2^32`` 计算；不是主机时钟或 UTC。ESP32 当前不提供该时间。
+      相邻差值按模 ``2^32`` 计算；不是主机时钟或 UTC。STM32 和 ESP32 0.26.1 报告 DRDY 时间；更早的 ESP32 serial-v1 固件报告组帧时间，不能仅凭字段存在推断采样时刻。
 
    .. py:attribute:: source_timestamp_valid
       :type: NDArray
 
-      bool，形状 ``(N,)``，标记对应源时间是否可用；ESP32 当前全为 False。
+      bool，形状 ``(N,)``，标记对应源时间字段是否可用，不保证其为 DRDY 时间；STM32 和 ESP32 帧均可为 True。
       由 SDK 返回时，两个源时间数组与其他样本数组一样只读，并随合批、切片保留。
 
    .. py:method:: __len__() -> int
