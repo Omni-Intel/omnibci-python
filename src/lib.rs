@@ -434,7 +434,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "9567fbc671a33c2d59b4037fa3330f43f70f3995")?;
+    m.add("SDK_REVISION", "6e17c1a7f4c06943927a91d64da3888a62840756")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",
