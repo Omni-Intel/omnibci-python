@@ -159,7 +159,12 @@ impl Backend {
     }
     fn snapshot_json(&self) -> String {
         match self {
-            Self::Stm32(d) => d.snapshot_json(),
+            Self::Stm32(d) => {
+                let s = d.snapshot();
+                let config = s.config.map(|c| serde_json::json!({"mode":c.mode,"enabled_mask":c.enabled,"bias_mask":c.bias,"loff_mask":c.loff,"gains":c.gains.as_slice(),"verified":true}));
+                let metadata = s.metadata.map(metadata_json);
+                serde_json::json!({"state":format!("{:?}",s.state).to_lowercase(),"config":config,"metadata":metadata,"generation":s.generation,"samples":s.samples,"missing_samples":s.missing_samples,"crc_errors":s.crc_errors,"ble":{},"error":s.error.map(|e| e.to_string())}).to_string()
+            }
             Self::Esp32(d) => {
                 let s = d.snapshot();
                 let config = s.config.map(|c| serde_json::json!({"reference":c.reference,"mode":c.mode,"enabled_mask":c.enabled_mask,"bias_mask":c.bias_mask,"srb2_mask":c.srb2_mask,"gains":c.gains,"verified":c.verified}));
@@ -429,7 +434,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "54fbad405c05bfef813f7acb323e5f0c73153092")?;
+    m.add("SDK_REVISION", "9567fbc671a33c2d59b4037fa3330f43f70f3995")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",
