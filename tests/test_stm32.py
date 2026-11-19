@@ -5,7 +5,7 @@ import omnibci as o
 import pytest
 
 
-def frame(sequence=0):
+def frame(sequence=0, rate_code=0):
     data = bytearray(128)
     data[:4] = b"\xa5\x5a\x03\x01"
     data[4:8] = sequence.to_bytes(4, "little")
@@ -14,6 +14,7 @@ def frame(sequence=0):
     values = [0, 1, -1, 8388607, -8388608, 42, -42, 1234] * 4
     for i, value in enumerate(values):
         data[25 + 3 * i : 28 + 3 * i] = (value & 0xFFFFFF).to_bytes(3, "big")
+    data[124] = rate_code
     data[125] = 4
     data[126:] = binascii.crc_hqx(data[:126], 0xFFFF).to_bytes(2, "little")
     return bytes(data)
@@ -47,10 +48,28 @@ def test_stm32_crc_truncation_and_wrap():
 
 
 @pytest.mark.parametrize(
+    ("rate_code", "expected_hz"),
+    [(0, 250), (1, 500), (2, 1000)],
+)
+def test_stm32_decode_sample_rates(rate_code, expected_hz):
+    batch = o.decode_frames(
+        frame(0, rate_code=rate_code) + frame(1, rate_code=rate_code),
+        device_type="stm32",
+    )
+    assert batch.sample_rate_hz == expected_hz
+    np.testing.assert_allclose(batch.sample_time_s, [0.0, 1.0 / expected_hz])
+
+
+@pytest.mark.parametrize(
     "values",
     [
         dict(gains=(24,) * 8),
         dict(gains=(3,) * 32),
+        dict(sample_rate_hz=0),
+        dict(sample_rate_hz=125),
+        dict(sample_rate_hz=2000),
+        dict(sample_rate_hz=True),
+        dict(sample_rate_hz="250"),
         dict(enabled_mask=True),
         dict(enabled_mask=2**32),
         dict(enabled_mask=-1),
@@ -67,8 +86,19 @@ def test_stm32_config_validation(values):
 def test_stm32_defaults():
     config = o.Stm32Config()
     assert config.mode == "both_bias"
+    assert config.sample_rate_hz == 250
     assert config.loff_mask == 0
     assert config.gains == (24,) * 32
+
+
+@pytest.mark.parametrize("sample_rate_hz", [250, 500, 1000])
+def test_stm32_config_sample_rate_roundtrip(sample_rate_hz):
+    config = o.Stm32Config(sample_rate_hz=sample_rate_hz)
+    wire = dict(config._wire(), verified=True)
+    assert wire["sample_rate_hz"] == sample_rate_hz
+    assert o.Stm32Config._from_wire(wire) == o.Stm32Config(
+        sample_rate_hz=sample_rate_hz, verified=True
+    )
 
 
 def test_discovery_type_is_retained_and_conflicts_rejected(monkeypatch):

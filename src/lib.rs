@@ -83,10 +83,15 @@ impl From<Config> for FrontendConfig {
         }
     }
 }
+fn default_sample_rate_hz() -> u16 {
+    250
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stm32Config {
     mode: u8,
+    #[serde(default = "default_sample_rate_hz")]
+    sample_rate_hz: u16,
     enabled_mask: u32,
     bias_mask: u32,
     loff_mask: u32,
@@ -96,6 +101,7 @@ impl From<Stm32Config> for omnibci_sdk::stm32::Configuration {
     fn from(c: Stm32Config) -> Self {
         Self {
             mode: c.mode,
+            sample_rate_hz: c.sample_rate_hz,
             enabled: c.enabled_mask,
             bias: c.bias_mask,
             loff: c.loff_mask,
@@ -161,7 +167,7 @@ impl Backend {
         match self {
             Self::Stm32(d) => {
                 let s = d.snapshot();
-                let config = s.config.map(|c| serde_json::json!({"mode":c.mode,"enabled_mask":c.enabled,"bias_mask":c.bias,"loff_mask":c.loff,"gains":c.gains.as_slice(),"verified":true}));
+                let config = s.config.map(|c| serde_json::json!({"mode":c.mode,"sample_rate_hz":c.sample_rate_hz,"enabled_mask":c.enabled,"bias_mask":c.bias,"loff_mask":c.loff,"gains":c.gains.as_slice(),"verified":true}));
                 let metadata = s.metadata.map(metadata_json);
                 serde_json::json!({"state":format!("{:?}",s.state).to_lowercase(),"config":config,"metadata":metadata,"generation":s.generation,"samples":s.samples,"missing_samples":s.missing_samples,"crc_errors":s.crc_errors,"ble":{},"error":s.error.map(|e| e.to_string())}).to_string()
             }
@@ -396,15 +402,26 @@ fn decode_frames<'py>(
         return Err(ConfigurationError::new_err("invalid gains"));
     }
     let samples = py.detach(|| {
-        let frames = if width == 32 {
+        let (frames, sample_rate_hz) = if width == 32 {
             let mut parser = omnibci_sdk::stm32::Parser::default();
-            parser.feed(&data, gains.as_slice().try_into().unwrap())
+            let frames = parser.feed(&data, gains.as_slice().try_into().unwrap());
+            let rate = parser
+                .data_packets
+                .first()
+                .and_then(|packet| packet.get(124))
+                .map_or(omnibci_sdk::FS, |code| match code {
+                    0 => 250,
+                    1 => 500,
+                    2 => 1000,
+                    _ => omnibci_sdk::FS,
+                });
+            (frames, rate)
         } else {
             let mut decoder = omnibci_sdk::acquisition::SampleDecoder {
                 scale: std::array::from_fn(|i| omnibci_sdk::lsb_uv(gains[i] as f32)),
                 ..Default::default()
             };
-            decoder.feed(&data, false).frames
+            (decoder.feed(&data, false).frames, omnibci_sdk::FS)
         };
         let mut previous = None;
         let mut index = 0u64;
@@ -420,7 +437,7 @@ fn decode_frames<'py>(
             frames,
             sample_indices: indices,
             received_at: Instant::now(),
-            sample_rate_hz: omnibci_sdk::FS,
+            sample_rate_hz,
         }
     });
     pack_samples(py, samples, width)
@@ -434,7 +451,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "6e17c1a7f4c06943927a91d64da3888a62840756")?;
+    m.add("SDK_REVISION", "1f1cae5929b448e66c48794dd24348879426ac95")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",
@@ -459,10 +476,14 @@ mod config_tests {
     use super::*;
     #[test]
     fn native_stm32_configuration_rejects_untrusted_fields() {
-        let valid = serde_json::json!({"mode":0,"enabled_mask":4294967295u32,"bias_mask":4294967295u32,"loff_mask":0,"gains":vec![24;32]});
+        let valid = serde_json::json!({"mode":0,"sample_rate_hz":250,"enabled_mask":4294967295u32,"bias_mask":4294967295u32,"loff_mask":0,"gains":vec![24;32]});
         let mut invalid = vec![];
         for (key, value) in [
             ("mode", serde_json::json!(5)),
+            ("sample_rate_hz", serde_json::json!(0)),
+            ("sample_rate_hz", serde_json::json!(125)),
+            ("sample_rate_hz", serde_json::json!(2000)),
+            ("sample_rate_hz", serde_json::json!(true)),
             ("enabled_mask", serde_json::json!(true)),
             ("enabled_mask", serde_json::json!(4294967296u64)),
             ("enabled_mask", serde_json::json!(-1)),
@@ -481,12 +502,17 @@ mod config_tests {
                 .and_then(|config| omnibci_sdk::stm32::Configuration::from(config).validate());
             assert!(result.is_err());
         }
-        let config = serde_json::from_value::<Stm32Config>(valid).unwrap();
-        assert!(
-            omnibci_sdk::stm32::Configuration::from(config)
-                .validate()
-                .is_ok()
-        );
+        for rate in [250u16, 500, 1000] {
+            let mut with_rate = valid.clone();
+            with_rate["sample_rate_hz"] = serde_json::json!(rate);
+            let config = serde_json::from_value::<Stm32Config>(with_rate).unwrap();
+            let sdk_config = omnibci_sdk::stm32::Configuration::from(config);
+            assert_eq!(sdk_config.sample_rate_hz, rate);
+            assert!(sdk_config.validate().is_ok());
+        }
+        let omitted_rate = serde_json::json!({"mode":0,"enabled_mask":4294967295u32,"bias_mask":4294967295u32,"loff_mask":0,"gains":vec![24;32]});
+        let config = serde_json::from_value::<Stm32Config>(omitted_rate).unwrap();
+        assert_eq!(config.sample_rate_hz, 250);
     }
     #[test]
     fn metadata_json_keeps_legacy_fields_and_exposes_components() {

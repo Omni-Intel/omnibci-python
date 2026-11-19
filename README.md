@@ -1,8 +1,8 @@
 # OmniBCI Python
 
-当前开发分支将 STM32/E73 托管会话迁入 SDK `9567fbc671a33c2d59b4037fa3330f43f70f3995`，绑定只保留语言接口与数据转换。此次迁移的验证以离线测试为准；下文旧 SDK 的实机记录不代表此提交已经实机验证。
+当前开发分支基于 `omnibci-sdk` 0.5.1（提交 `1f1cae5929b448e66c48794dd24348879426ac95`），STM32/E73 托管会话位于 SDK 中，绑定只保留语言接口与数据转换。此次更新的验证以离线测试为准；下文旧 SDK 的实机记录不代表此提交已经实机验证。
 
-独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + ADS1299 32 导的板端 USB CDC 与 E73 BLE 直连，均为 250 Hz。STM32 路径使用 Rust SDK 的 STM32 驱动。
+独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导（250 Hz），以及 STM32 + ADS1299 32 导的板端 USB CDC 与 E73 BLE 直连（支持 250 / 500 / 1000 Hz 采样率配置，默认 250 Hz）。STM32 路径使用 Rust SDK 的 STM32 驱动。
 
 ## STM32 32 导 BLE
 
@@ -132,7 +132,7 @@ with Board.connect("serial://COM5") as board:
 | `source_timestamp_valid` | bool，`(N,)`，源时间是否可用；ESP32 当前全为 false |
 | `mode` | uint8，`(N,)`，固件模式编号 |
 | `generation` | 每次成功开始采集后的会话代数 |
-| `sample_rate_hz` | 250 |
+| `sample_rate_hz` | 采样率（ESP32 为 250；STM32 支持 250 / 500 / 1000） |
 | `sample_time_s` | 由 sample_indices / sample_rate_hz 计算的相对时间 |
 | `received_at` | 主机 `time.monotonic()` 时间轴上的近似 SDK 交付时间；合批时取最后一批，非硬件采样时间 |
 

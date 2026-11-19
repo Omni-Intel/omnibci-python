@@ -259,12 +259,13 @@ FrontendConfig
 Stm32Config
 -----------
 
-.. py:class:: Stm32Config(mode="both_bias", enabled_mask=4294967295, bias_mask=4294967295, loff_mask=0, gains=(24,) * 32, verified=False)
+.. py:class:: Stm32Config(mode="both_bias", enabled_mask=4294967295, bias_mask=4294967295, loff_mask=0, gains=(24,) * 32, verified=False, sample_rate_hz=250)
 
    STM32 32 导不可变配置。mode 使用 ``both_bias``、``eeg``、``no_bias``、
    ``shorted`` 或 ``test`` 字符串，掩码为 32 位整数；BIAS/LOFF 必须是 enabled
    的子集，LOFF 只用于前三种模式。
-   gains 为 32 个允许的 PGA 增益，verified 表示实际硬件确认，不参与下发。
+   gains 为 32 个允许的 PGA 增益，``sample_rate_hz`` 允许 ``250``、``500`` 或
+   ``1000``（默认 ``250``），verified 表示实际硬件确认，不参与下发。
    用法与固件限制见 :doc:`stm32`。
 
 ImpedanceResult
@@ -347,7 +348,7 @@ SampleBatch
    .. py:attribute:: sample_rate_hz
       :type: int
 
-      采样率，当前为 250 Hz。
+      采样率（ESP32 为 250 Hz；STM32 支持 250、500 或 1000 Hz）。
 
    .. py:attribute:: received_at
       :type: float
