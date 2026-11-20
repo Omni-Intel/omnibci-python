@@ -75,7 +75,7 @@ The 26 device-state regressions formerly in this binding are retained in SDK
 unit tests. Python keeps snapshot JSON conversion and the same language API,
 with ``Stm32Config.sample_rate_hz`` supporting 250, 500, and 1000 Hz from
 ``omnibci-sdk`` 0.5.1.
-The SDK pin is ``1f1cae5929b448e66c48794dd24348879426ac95``.
+The SDK pin is ``c5be885d801611ca82d093ea43baaf47e5790910``.
 
 Validation: 2 binding Rust tests, strict all-target clippy, a rebuilt native
 extension, and 173 offline Python tests passed (1 hardware test deselected).
