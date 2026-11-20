@@ -492,6 +492,7 @@ Snapshot
    :param device_type: ``"esp32"`` 或 ``"stm32"``，选择对应的原始串口协议。
 
    跳过 CRC 错误帧，丢弃末尾不完整帧。
+   STM32 缓冲区含多种采样率时抛出 ``ValueError``，请按采样率分段解码。
    参数类型错误或配置无效会抛出 TypeError / ValueError。
 
 .. py:function:: decode_triggers(data: bytes) -> tuple[TriggerEvent, ...]

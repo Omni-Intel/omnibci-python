@@ -401,20 +401,25 @@ fn decode_frames<'py>(
     if gains.len() != width || gains.iter().any(|g| ![1, 2, 4, 6, 8, 12, 24].contains(g)) {
         return Err(ConfigurationError::new_err("invalid gains"));
     }
-    let samples = py.detach(|| {
+    let samples = py.detach(|| -> PyResult<Samples> {
         let (frames, sample_rate_hz) = if width == 32 {
             let mut parser = omnibci_sdk::stm32::Parser::default();
             let frames = parser.feed(&data, gains.as_slice().try_into().unwrap());
-            let rate = parser
-                .data_packets
-                .first()
-                .and_then(|packet| packet.get(124))
-                .map_or(omnibci_sdk::FS, |code| match code {
-                    0 => 250,
-                    1 => 500,
-                    2 => 1000,
-                    _ => omnibci_sdk::FS,
-                });
+            // The parser retains validated V3 packets, including packets whose
+            // sequence numbers it filters out of the decoded frames.
+            const RATE_CODE_OFFSET: usize = 124;
+            let mut rate_codes = parser.data_packets.iter().map(|p| p[RATE_CODE_OFFSET]);
+            let code = rate_codes.next().unwrap_or(0);
+            if rate_codes.any(|other| other != code) {
+                return Err(PyValueError::new_err(
+                    "STM32 capture contains mixed sample rates; decode each rate separately",
+                ));
+            }
+            let rate = match code {
+                1 => 500,
+                2 => 1000,
+                _ => omnibci_sdk::FS,
+            };
             (frames, rate)
         } else {
             let mut decoder = omnibci_sdk::acquisition::SampleDecoder {
@@ -432,14 +437,14 @@ fn decode_frames<'py>(
             index += 1;
             previous = Some(frame.sequence);
         }
-        Samples {
+        Ok(Samples {
             generation: 0,
             frames,
             sample_indices: indices,
             received_at: Instant::now(),
             sample_rate_hz,
-        }
-    });
+        })
+    })?;
     pack_samples(py, samples, width)
 }
 #[pymodule]

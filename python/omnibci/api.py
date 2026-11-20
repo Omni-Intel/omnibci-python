@@ -1069,6 +1069,8 @@ def decode_frames(
 
     Not a streaming parser: trailing partial frames are not retained between calls.
     CRC-invalid frames are skipped by the SDK. Suitable for complete captured buffers.
+    An STM32 buffer with mixed sample rates raises ValueError. Decode each rate
+    separately.
     """
     _device_type(device_type)
     config_type = Stm32Config if device_type == "stm32" else FrontendConfig

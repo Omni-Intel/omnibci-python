@@ -37,7 +37,7 @@ def test_stm32_decode():
 
 
 def test_stm32_crc_truncation_and_wrap():
-    bad = bytearray(frame(1))
+    bad = bytearray(frame(1, rate_code=2))
     bad[50] ^= 1
     batch = o.decode_frames(
         frame(0xFFFFFFFF) + frame(0) + bad + frame(3), device_type="stm32"
@@ -58,6 +58,13 @@ def test_stm32_decode_sample_rates(rate_code, expected_hz):
     )
     assert batch.sample_rate_hz == expected_hz
     np.testing.assert_allclose(batch.sample_time_s, [0.0, 1.0 / expected_hz])
+
+
+@pytest.mark.parametrize("next_sequence", [0, 2])
+def test_stm32_decode_rejects_mixed_sample_rates(next_sequence):
+    capture = frame(0) + frame(1) + frame(next_sequence, rate_code=2)
+    with pytest.raises(ValueError, match="mixed sample rates"):
+        o.decode_frames(capture, device_type="stm32")
 
 
 @pytest.mark.parametrize(
