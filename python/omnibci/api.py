@@ -158,10 +158,17 @@ class Stm32Config:
     loff_mask: int = 0
     gains: tuple[int, ...] = (24,) * 32
     verified: bool = False
+    sample_rate_hz: Literal[250, 500, 1000] = 250
 
     def __post_init__(self) -> None:
         if self.mode not in _MODES:
             raise ValueError("unsupported mode")
+        if type(self.sample_rate_hz) is not int or self.sample_rate_hz not in (
+            250,
+            500,
+            1000,
+        ):
+            raise ValueError("sample_rate_hz must be 250, 500, or 1000")
         for name in ("enabled_mask", "bias_mask", "loff_mask"):
             value = getattr(self, name)
             if type(value) is not int or not 0 <= value <= 0xFFFFFFFF:
@@ -180,6 +187,7 @@ class Stm32Config:
     def _wire(self) -> dict:
         return dict(
             mode=_MODES.index(self.mode),
+            sample_rate_hz=self.sample_rate_hz,
             enabled_mask=self.enabled_mask,
             bias_mask=self.bias_mask,
             loff_mask=self.loff_mask,
@@ -195,6 +203,7 @@ class Stm32Config:
             loff_mask=value["loff_mask"],
             gains=tuple(value["gains"]),
             verified=value["verified"],
+            sample_rate_hz=value.get("sample_rate_hz", 250),
         )
 
 
@@ -1060,6 +1069,8 @@ def decode_frames(
 
     Not a streaming parser: trailing partial frames are not retained between calls.
     CRC-invalid frames are skipped by the SDK. Suitable for complete captured buffers.
+    An STM32 buffer with mixed sample rates raises ValueError. Decode each rate
+    separately.
     """
     _device_type(device_type)
     config_type = Stm32Config if device_type == "stm32" else FrontendConfig

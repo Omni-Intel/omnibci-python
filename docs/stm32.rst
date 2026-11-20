@@ -59,7 +59,8 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 为 ``0xffffffff``，LOFF 为 0，增益为 32 个 24。增益允许 1、2、4、6、8、12、24。
 ``mode`` 使用 ``both_bias``（默认）、``eeg``、``no_bias``、``shorted``、``test``
 字符串，SDK 分别映射到固件编号 0–4；LOFF 仅允许前三种模式。
-这里不提供 ESP32 的 SRB2 开关或采样率调整。
+``sample_rate_hz`` 支持 ``250``（默认）、``500`` 或 ``1000`` Hz（需配套支持对应速率的固件）。
+这里不提供 ESP32 的 SRB2 开关。
 
 只在停采时配置，并等待实际硬件确认。关闭时需停采并确认关闭 LOFF，失败会报告
 错误，不能据此认为电极激励已关闭。阻抗测量见下文“阻抗测量”。
@@ -108,7 +109,7 @@ bit 0 对应 CH1；BIAS 和 LOFF 必须是 enabled 的子集。默认 enabled/bi
 
 ``eeg_uv`` 和 ``raw_counts`` 分别为只读 float32/int32 的 ``(N,32)`` 数组。
 ``status`` 为 ``(N,12)``，依次保留四片 ADS1299 的三字节状态。
-``sample_rate_hz`` 为 250；无效样本由 ``valid`` 标记，序号缺口保留，不补造 EEG。
+``sample_rate_hz`` 为当前配置的采样率（250、500 或 1000 Hz）；无效样本由 ``valid`` 标记，序号缺口保留，不补造 EEG。
 原始 V3 包长 128 字节；增益来自已确认配置。
 
 .. code-block:: python

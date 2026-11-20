@@ -66,3 +66,17 @@ Sphinx 只验证文档语法和交叉引用，不替代采集测试。
 ----------------
 
 STM32/E73 会话在可能开启 LOFF 时发生故障，会先尝试确认停止，再提交 LOFF=0 配置并等待匹配确认，之后释放连接。后台清理上限为 10 秒，显式关闭还受调用者超时限制。原始故障始终保留，清理不能恢复采集；若连接已断或确认缺失，仍报告激励关闭未确认。回归测试覆盖队列溢出、丢失确认、清理前及清理期间到达的旧 ACK，以及关闭期限。CC 使用 DeepSeek deepseek-flash[1m] 参与审查和实现，Codex 复核并修复 ACK 顺序边界。
+
+Shared managed-session migration
+--------------------------------
+
+STM32/E73 ownership now comes from ``omnibci_sdk::session::Stm32Device``.
+The 26 device-state regressions formerly in this binding are retained in SDK
+unit tests. Python keeps snapshot JSON conversion and the same language API,
+with ``Stm32Config.sample_rate_hz`` supporting 250, 500, and 1000 Hz from
+``omnibci-sdk`` 0.5.1.
+The SDK pin is ``1f1cae5929b448e66c48794dd24348879426ac95``.
+
+Validation: 2 binding Rust tests, strict all-target clippy, a rebuilt native
+extension, and 173 offline Python tests passed (1 hardware test deselected).
+No real devices were opened; earlier hardware records do not validate this pin.

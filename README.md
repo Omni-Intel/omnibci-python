@@ -1,6 +1,8 @@
 # OmniBCI Python
 
-独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导，以及 STM32 + ADS1299 32 导的板端 USB CDC 与 E73 BLE 直连，均为 250 Hz。STM32 路径使用 Rust SDK 的 STM32 驱动。
+当前开发分支基于 `omnibci-sdk` 0.5.1（提交 `1f1cae5929b448e66c48794dd24348879426ac95`），STM32/E73 托管会话位于 SDK 中，绑定只保留语言接口与数据转换。此次更新的验证以离线测试为准；下文旧 SDK 的实机记录不代表此提交已经实机验证。
+
+独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导（250 Hz），以及 STM32 + ADS1299 32 导的板端 USB CDC 与 E73 BLE 直连（支持 250 / 500 / 1000 Hz 采样率配置，默认 250 Hz）。STM32 路径使用 Rust SDK 的 STM32 驱动。
 
 ## STM32 32 导 BLE
 
@@ -32,7 +34,7 @@ with Board.connect("serial://COM5", device_type="stm32", timeout=20) as board:
 
 当前 STM32 固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle 和双模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
-SDK 固定到整合当前主线与确认式 ESP32 LOFF 控制的提交 `54fbad405c05bfef813f7acb323e5f0c73153092`。本次升级保持公开 Python API 与包版本 0.2.0 不变，已完成离线验证和 USB 8/32 导短时实机采集；验证范围见 [`docs/development.rst`](docs/development.rst)。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
+USB 8/32 导短时实机采集记录对应迁移前的 SDK 提交 `54fbad405c05bfef813f7acb323e5f0c73153092`，验证范围见 [`docs/development.rst`](docs/development.rst)。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
 
 ## 安装
 
@@ -130,7 +132,7 @@ with Board.connect("serial://COM5") as board:
 | `source_timestamp_valid` | bool，`(N,)`，源时间是否可用；ESP32 当前全为 false |
 | `mode` | uint8，`(N,)`，固件模式编号 |
 | `generation` | 每次成功开始采集后的会话代数 |
-| `sample_rate_hz` | 250 |
+| `sample_rate_hz` | 采样率（ESP32 为 250；STM32 支持 250 / 500 / 1000） |
 | `sample_time_s` | 由 sample_indices / sample_rate_hz 计算的相对时间 |
 | `received_at` | 主机 `time.monotonic()` 时间轴上的近似 SDK 交付时间；合批时取最后一批，非硬件采样时间 |
 
