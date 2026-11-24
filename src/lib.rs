@@ -1,3 +1,4 @@
+mod esb;
 mod trigger;
 // Thin CPython adapter; all protocol and device operations remain in omnibci-sdk.
 use omnibci_sdk::{
@@ -204,24 +205,31 @@ impl NativeDevice {
     #[pyo3(signature = (endpoint, timeout, device_type="esp32"))]
     fn connect(py: Python<'_>, endpoint: &str, timeout: f64, device_type: &str) -> PyResult<Self> {
         let timeout = duration(timeout)?;
-        let (kind, address) = endpoint
-            .split_once("://")
-            .ok_or_else(|| PyValueError::new_err("endpoint must be serial://PORT or ble://KEY"))?;
-        if address.is_empty() || !matches!(kind, "serial" | "ble") {
+        let (kind, address) = endpoint.split_once("://").ok_or_else(|| {
+            PyValueError::new_err(
+                "endpoint must be serial://PORT, ble://KEY, or esb://PORT[?board=ID]",
+            )
+        })?;
+        if address.is_empty() || !matches!(kind, "serial" | "ble" | "esb") {
             return Err(PyValueError::new_err(
-                "endpoint must be serial://PORT or ble://KEY",
+                "endpoint must be serial://PORT, ble://KEY, or esb://PORT[?board=ID]",
             ));
         }
         let device = py
             .detach(|| match device_type {
                 "esp32" => match kind {
                     "serial" => Device::connect_serial(address, timeout),
-                    _ => Device::connect_ble(address, timeout),
+                    "ble" => Device::connect_ble(address, timeout),
+                    _ => Err(Error::InvalidConfig(
+                        "esb:// endpoints require device_type='stm32'".into(),
+                    )),
                 }
                 .map(Backend::Esp32),
-                "stm32" => {
-                    stm32_session::Device::connect(kind, address, timeout).map(Backend::Stm32)
+                "stm32" => match kind {
+                    "esb" => esb::connect(address, timeout),
+                    _ => stm32_session::Device::connect(kind, address, timeout),
                 }
+                .map(Backend::Stm32),
                 _ => Err(Error::InvalidConfig(
                     "device_type must be esp32 or stm32".into(),
                 )),
@@ -384,6 +392,14 @@ fn discover_ble_json(py: Python<'_>, timeout: f64, device_type: &str) -> PyResul
         .map_err(map_error)?;
     Ok(serde_json::Value::Array(devices.into_iter().map(|d|serde_json::json!({"id":d.key,"name":d.name,"address":d.address,"rssi_dbm":d.rssi_dbm})).collect()).to_string())
 }
+#[pyfunction]
+fn discover_dongles_json(py: Python<'_>, timeout: f64) -> PyResult<String> {
+    let timeout = duration(timeout)?;
+    let dongles = py
+        .detach(|| esb::discover_dongles(timeout))
+        .map_err(map_error)?;
+    Ok(dongles.to_string())
+}
 /// Offline decoding delegates to the same SDK parser as live acquisition.
 #[pyfunction]
 #[pyo3(signature = (data, gains, device_type="esp32"))]
@@ -454,9 +470,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<trigger::NativeTriggerController>()?;
     m.add_function(wrap_pyfunction!(serial_ports, m)?)?;
     m.add_function(wrap_pyfunction!(discover_ble_json, m)?)?;
+    m.add_function(wrap_pyfunction!(discover_dongles_json, m)?)?;
     m.add_function(wrap_pyfunction!(decode_frames, m)?)?;
     m.add("SDK_VERSION", omnibci_sdk::SDK_VERSION)?;
-    m.add("SDK_REVISION", "c5be885d801611ca82d093ea43baaf47e5790910")?;
+    m.add("SDK_REVISION", "08ba23dd8f8684bb57fb040dba4d266ab99d265a")?;
     m.add("OmniBCIError", m.py().get_type::<OmniBCIError>())?;
     m.add(
         "DeviceTimeoutError",

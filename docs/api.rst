@@ -13,18 +13,22 @@ Board
 
    持有单个设备，用 :py:meth:`connect` 创建。支持 ``with``，退出时关闭设备。
 
-   .. py:classmethod:: connect(device: str | DeviceInfo, *, timeout: float = 15.0, device_type: str | None = None) -> Board
+   .. py:classmethod:: connect(device: str | DeviceInfo | DongleInfo | DongleBoardInfo, *, timeout: float = 15.0, device_type: str | None = None) -> Board
 
       连接设备并等待 SDK 确认就绪。
 
-      :param device: ``serial://PORT``、``ble://KEY`` 或设备发现返回的对象。
+      :param device: ``serial://PORT``、``ble://KEY``、``esb://PORT[?board=ID]`` 或设备/Dongle 发现返回的对象。
       :param timeout: 连接超时秒数，范围 ``(0, 60]``。
-      :param device_type: ``"esp32"`` 或 ``"stm32"``；省略时使用 DeviceInfo 中的类型，字符串入口默认为 ESP32。
+      :param device_type: ``"esp32"`` 或 ``"stm32"``；省略时使用发现对象中的类型（Dongle 对象固定为 ``"stm32"``），字符串入口默认为 ESP32。
 
    .. py:staticmethod:: discover(*, transport: str = "serial", timeout: float = 10.0, device_type: str = "esp32") -> list[DeviceInfo]
 
-      枚举串口候选或扫描 BLE。``transport`` 只能是 ``"serial"`` 或 ``"ble"``。
+      枚举串口候选、扫描 BLE，或探测 ESB Dongle（``transport="esb"``，仅支持 ``device_type="stm32"``）。
       串口枚举不会连接并验证候选设备；timeout 仍会校验，但不用于串口枚举等待。
+
+   .. py:staticmethod:: discover_dongles(*, timeout: float = 10.0) -> list[DongleInfo]
+
+      探测已连接的 ESB USB Dongle，返回每个接收器的串口、工作模式（``"search"`` / ``"bound"`` / ``"legacy"``）、可选固件版本以及在 ``"search"`` 模式下扫描到的采集板列表。
 
    .. py:property:: snapshot
       :type: Snapshot
@@ -130,7 +134,7 @@ DeviceInfo
    .. py:attribute:: transport
       :type: str
 
-      ``"serial"`` 或 ``"ble"``。
+      ``"serial"``、``"ble"`` 或 ``"esb"``。
 
    .. py:attribute:: address
       :type: str
@@ -140,12 +144,68 @@ DeviceInfo
    .. py:attribute:: rssi_dbm
       :type: int | None
 
-      BLE 信号强度，缺失或串口设备为 None。
+      BLE 或 ESB Dongle 扫描到的信号强度，缺失或串口设备为 None。
 
    .. py:property:: endpoint
       :type: str
 
       根据 transport 和 id 生成的连接字符串。
+
+DongleInfo 与 DongleBoardInfo
+-----------------------------
+
+.. py:class:: DongleBoardInfo(id: str, port: str, rssi_dbm: int | None = None)
+
+   在 ``"search"`` 模式 ESB Dongle 上扫描到的单块 STM32/E73 采集板，不可变数据类。
+
+   .. py:attribute:: id
+      :type: str
+
+      16 位十六进制硬件 ID（例如 ``"A344B3C4FCB2E83F"``）。
+
+   .. py:attribute:: port
+      :type: str
+
+      对应 ESB Dongle 的串口名。
+
+   .. py:attribute:: rssi_dbm
+      :type: int | None
+
+      接收器测得的广播信号强度；旧版接收器不支持时为 None。
+
+   .. py:property:: endpoint
+      :type: str
+
+      连接字符串 ``esb://{port}?board={id}``。
+
+.. py:class:: DongleInfo(port: str, mode: str, firmware_version: str | None = None, boards: tuple[DongleBoardInfo, ...] = ())
+
+   单个 ESB USB Dongle 的探测结果，不可变数据类。
+
+   .. py:attribute:: port
+      :type: str
+
+      ESB Dongle 串口名。
+
+   .. py:attribute:: mode
+      :type: str
+
+      ``"search"``、``"bound"`` 或 ``"legacy"``。
+
+   .. py:attribute:: firmware_version
+      :type: str | None
+
+      Dongle 报告的固件版本；旧版接收器返回 None。
+
+   .. py:attribute:: boards
+      :type: tuple[DongleBoardInfo, ...]
+
+      ``"search"`` 模式下扫描到的采集板元组。
+
+   .. py:property:: endpoint
+      :type: str
+
+      连接字符串 ``esb://{port}``（适用于 ``"bound"`` / ``"legacy"`` 模式）。
 
 ComponentFirmware
 -----------------

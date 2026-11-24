@@ -14,7 +14,7 @@
 ----------
 
 ``dev/32ch`` 开发构建使用分支 CI artifacts 或本机构建的 wheel；未发布 tag 前，
-不要把文档中的 0.3.0 文件名理解为已存在正式 Release。
+不要把文档中的 0.3.1 文件名理解为已存在正式 Release。
 
 从 `GitHub Releases <https://github.com/Omni-Intel/omnibci-python/releases>`_
 下载匹配操作系统、CPU 架构和 Python 的 wheel。以下为 Windows x86-64 示例，
@@ -22,7 +22,7 @@
 
 .. code-block:: console
 
-   python -m pip install path/to/omnibci-0.3.0-cp311-abi3-win_amd64.whl
+   python -m pip install path/to/omnibci-0.3.1-cp311-abi3-win_amd64.whl
    python -c "import omnibci; print(omnibci.__version__)"
 
 从源码安装

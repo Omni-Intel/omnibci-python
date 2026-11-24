@@ -6,6 +6,8 @@ from .api import (
     ComponentFirmware,
     DeviceInfo,
     DeviceMetadata,
+    DongleBoardInfo,
+    DongleInfo,
     FrontendConfig,
     ImpedanceResult,
     PartialReadError,
@@ -26,7 +28,7 @@ ConfigurationError = _native.ConfigurationError
 DisconnectedError = _native.DisconnectedError
 BufferOverflowError = _native.BufferOverflowError
 TransportError = _native.TransportError
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 SDK_VERSION = _native.SDK_VERSION
 SDK_REVISION = _native.SDK_REVISION
 __all__ = [
@@ -38,6 +40,8 @@ __all__ = [
     "ComponentFirmware",
     "DeviceInfo",
     "DeviceMetadata",
+    "DongleBoardInfo",
+    "DongleInfo",
     "FrontendConfig",
     "ImpedanceResult",
     "Stm32Config",

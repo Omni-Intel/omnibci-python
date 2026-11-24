@@ -1,6 +1,6 @@
 # OmniBCI Python
 
-当前开发分支基于 `omnibci-sdk` 0.5.1（提交 `c5be885d801611ca82d093ea43baaf47e5790910`），STM32/E73 托管会话位于 SDK 中，绑定只保留语言接口与数据转换。此次更新的验证以离线测试为准；下文旧 SDK 的实机记录不代表此提交已经实机验证。
+当前开发分支基于 `omnibci-sdk` 0.5.2（提交 `08ba23dd8f8684bb57fb040dba4d266ab99d265a`），STM32/E73 托管会话位于 SDK 中，绑定只保留语言接口与数据转换。此次更新的验证以离线测试为准；下文旧 SDK 的实机记录不代表此提交已经实机验证。
 
 独立 Rust SDK 的 Python 接口。支持 ESP32 + ADS1299 八导（250 Hz），以及 STM32 + ADS1299 32 导的板端 USB CDC 与 E73 BLE 直连（支持 250 / 500 / 1000 Hz 采样率配置，默认 250 Hz）。STM32 路径使用 Rust SDK 的 STM32 驱动。
 
@@ -29,10 +29,10 @@ with Board.connect("serial://COM5", device_type="stm32", timeout=20) as board:
     print(result.values_kohm[0], "kΩ", hex(result.clipped_mask))
 ```
 
-板端 USB CDC 使用 `Board.connect("serial://COM5", device_type="stm32")`。
+板端 USB CDC 使用 `Board.connect("serial://COM5", device_type="stm32")`；ESB USB Dongle 可通过 `Board.discover_dongles()` / `Board.discover(transport="esb", device_type="stm32")` 探测接收器版本与采集板，并以 `Board.connect("esb://COM28?board=A344B3C4FCB2E83F", device_type="stm32")`（Search 模式）或 `esb://COM28`（Bound/Legacy 模式）连接。
 原有 ESP32 调用默认不变。E73 使用独立的 BLE 服务，当前广播名为 `OmniBCI-32CH`，SDK 也兼容旧名称 `OmniBCI32-BLE`；以实际发现结果为准。要求实际 TX/RX 2M、MTU ≥153、E73 SPI 桥接固件，以及支持 AE/BE 完整配置的 STM32 32.0.5 系列固件。32.0.4 和链路自检镜像不适用。
 
-当前 STM32 固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle 和双模式切换。配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
+配套开发固件仍有 BLE ATT ACK 超时排查记录，本包的软件测试和 wheel 构建不代表长时实机稳定性验收。配置、数据布局和清理边界见 [32 导指南](docs/stm32.rst)。以下原有八导示例仍适用于 ESP32。
 
 USB 8/32 导短时实机采集记录对应迁移前的 SDK 提交 `54fbad405c05bfef813f7acb323e5f0c73153092`，验证范围见 [`docs/development.rst`](docs/development.rst)。设备快照通过 `board.info.stm32` / `board.info.e73` 暴露各组件独立报告的版本、Git revision、dirty、状态和协议，同时保留原有 `firmware` / `hardware` / `protocol` 字段。Python 接口不自动重连；运行时可用 `omnibci.SDK_REVISION` 核对实际安装的 SDK 基线。
 
@@ -45,7 +45,7 @@ USB 8/32 导短时实机采集记录对应迁移前的 SDK 提交 `54fbad405c05b
 从 [Release](https://github.com/Omni-Intel/omnibci-python/releases/latest) 下载匹配平台的 wheel 后安装：
 
 ```sh
-python -m pip install path/to/omnibci-0.3.0-cp311-abi3-win_amd64.whl
+python -m pip install path/to/omnibci-0.3.1-cp311-abi3-win_amd64.whl
 ```
 
 串口需要系统识别设备及相应驱动/访问权限。BLE 需要蓝牙适配器；Linux 使用 BlueZ/D-Bus，macOS 需要终端或 Python 宿主的蓝牙权限。关闭其他占用板子的 GUI/程序后再连接。

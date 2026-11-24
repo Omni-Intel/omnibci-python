@@ -74,9 +74,9 @@ STM32/E73 ownership now comes from ``omnibci_sdk::session::Stm32Device``.
 The 26 device-state regressions formerly in this binding are retained in SDK
 unit tests. Python keeps snapshot JSON conversion and the same language API,
 with ``Stm32Config.sample_rate_hz`` supporting 250, 500, and 1000 Hz from
-``omnibci-sdk`` 0.5.1.
-The SDK pin is ``c5be885d801611ca82d093ea43baaf47e5790910``.
+``omnibci-sdk`` 0.5.2.
+The SDK pin is ``08ba23dd8f8684bb57fb040dba4d266ab99d265a``.
 
 Validation: 2 binding Rust tests, strict all-target clippy, a rebuilt native
-extension, and 173 offline Python tests passed (1 hardware test deselected).
+extension, and 186 offline Python tests passed (1 hardware test skipped).
 No real devices were opened; earlier hardware records do not validate this pin.
