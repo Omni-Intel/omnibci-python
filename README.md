@@ -45,7 +45,7 @@ USB 8/32 导短时实机采集记录对应迁移前的 SDK 提交 `54fbad405c05b
 从 [Release](https://github.com/Omni-Intel/omnibci-python/releases/latest) 下载匹配平台的 wheel 后安装：
 
 ```sh
-python -m pip install path/to/omnibci-0.3.0-cp311-abi3-win_amd64.whl
+python -m pip install path/to/omnibci-0.3.1-cp311-abi3-win_amd64.whl
 ```
 
 串口需要系统识别设备及相应驱动/访问权限。BLE 需要蓝牙适配器；Linux 使用 BlueZ/D-Bus，macOS 需要终端或 Python 宿主的蓝牙权限。关闭其他占用板子的 GUI/程序后再连接。
