@@ -35,7 +35,7 @@ def _timeout(value: float) -> float:
 class DeviceInfo:
     id: str
     name: str
-    transport: Literal["serial", "ble"]
+    transport: Literal["serial", "ble", "esb"]
     address: str
     rssi_dbm: int | None = None
     device_type: Literal["esp32", "stm32"] = "esp32"
@@ -43,6 +43,33 @@ class DeviceInfo:
     @property
     def endpoint(self) -> str:
         return f"{self.transport}://{self.id}"
+
+
+@dataclass(frozen=True)
+class DongleBoardInfo:
+    """One STM32/E73 board discovered through a search-mode ESB dongle."""
+
+    id: str
+    port: str
+    rssi_dbm: int | None = None
+
+    @property
+    def endpoint(self) -> str:
+        return f"esb://{self.port}?board={self.id}"
+
+
+@dataclass(frozen=True)
+class DongleInfo:
+    """One ESB USB dongle probed via ``discovery::Dongle::open_with_version``."""
+
+    port: str
+    mode: Literal["search", "bound", "legacy"]
+    firmware_version: str | None = None
+    boards: tuple[DongleBoardInfo, ...] = ()
+
+    @property
+    def endpoint(self) -> str:
+        return f"esb://{self.port}"
 
 
 @dataclass(frozen=True)
@@ -389,7 +416,7 @@ class Board:
     @classmethod
     def connect(
         cls,
-        device: str | DeviceInfo,
+        device: str | DeviceInfo | DongleInfo | DongleBoardInfo,
         *,
         timeout: float = 15.0,
         device_type: Literal["esp32", "stm32"] | None = None,
@@ -398,11 +425,21 @@ class Board:
             if device_type is not None and device_type != device.device_type:
                 raise ValueError("device_type conflicts with discovered device")
             device_type = _device_type(device.device_type)
+        elif isinstance(device, (DongleInfo, DongleBoardInfo)):
+            if device_type is not None and device_type != "stm32":
+                raise ValueError("device_type conflicts with discovered ESB dongle")
+            device_type = "stm32"
         else:
             device_type = _device_type("esp32" if device_type is None else device_type)
-        endpoint = device.endpoint if isinstance(device, DeviceInfo) else device
+        endpoint = (
+            device.endpoint
+            if isinstance(device, (DeviceInfo, DongleInfo, DongleBoardInfo))
+            else device
+        )
         if not isinstance(endpoint, str):
-            raise TypeError("device must be an endpoint string or DeviceInfo")
+            raise TypeError(
+                "device must be an endpoint string, DeviceInfo, DongleInfo, or DongleBoardInfo"
+            )
         timeout = _timeout(timeout)
         native = (
             _native.NativeDevice.connect(endpoint, timeout)
@@ -412,9 +449,31 @@ class Board:
         return cls(native, device_type)
 
     @staticmethod
+    def discover_dongles(*, timeout: float = 10.0) -> list[DongleInfo]:
+        """Probe attached ESB dongles, returning firmware version, mode, and scanned boards."""
+        timeout = _timeout(timeout)
+        items = json.loads(_native.discover_dongles_json(timeout))
+        return [
+            DongleInfo(
+                port=item["port"],
+                mode=item["mode"],
+                firmware_version=item.get("firmware_version"),
+                boards=tuple(
+                    DongleBoardInfo(
+                        id=board["id"],
+                        port=board["port"],
+                        rssi_dbm=board.get("rssi_dbm"),
+                    )
+                    for board in item.get("boards", ())
+                ),
+            )
+            for item in items
+        ]
+
+    @staticmethod
     def discover(
         *,
-        transport: Literal["serial", "ble"] = "serial",
+        transport: Literal["serial", "ble", "esb"] = "serial",
         timeout: float = 10.0,
         device_type: Literal["esp32", "stm32"] = "esp32",
     ) -> list[DeviceInfo]:
@@ -435,7 +494,36 @@ class Board:
                     else _native.discover_ble_json(timeout, device_type)
                 )
             ]
-        raise ValueError("transport must be serial or ble")
+        if transport == "esb":
+            if device_type != "stm32":
+                raise ValueError("transport='esb' requires device_type='stm32'")
+            devices: list[DeviceInfo] = []
+            for dongle in Board.discover_dongles(timeout=timeout):
+                if dongle.mode == "search":
+                    for board in dongle.boards:
+                        devices.append(
+                            DeviceInfo(
+                                id=f"{board.port}?board={board.id}",
+                                name=f"OmniBCI-32CH · {board.id}",
+                                transport="esb",
+                                address=board.port,
+                                rssi_dbm=board.rssi_dbm,
+                                device_type="stm32",
+                            )
+                        )
+                else:
+                    devices.append(
+                        DeviceInfo(
+                            id=dongle.port,
+                            name=f"ESB Dongle ({dongle.port})",
+                            transport="esb",
+                            address=dongle.port,
+                            rssi_dbm=None,
+                            device_type="stm32",
+                        )
+                    )
+            return devices
+        raise ValueError("transport must be serial, ble, or esb")
 
     @property
     def snapshot(self) -> Snapshot:

@@ -31,10 +31,26 @@ STM32 32 导与 E73 BLE
 串口连接示例为 ``Board.connect("serial://COM5", device_type="stm32")``，
 Linux/macOS 应使用系统提供的串口路径。
 
+ESB USB Dongle 支持使用 ``Board.discover_dongles()`` 探测接收器固件版本、工作模式与附近采集板，
+或使用 ``Board.discover(transport="esb", device_type="stm32")`` 获取可直接传入 ``Board.connect`` 的候选列表；
+已知目标板子 ID 时也可以直接连接：
+
+.. code-block:: python
+
+   from omnibci import Board
+
+   dongles = Board.discover_dongles(timeout=10)
+   with Board.connect("esb://COM28?board=A344B3C4FCB2E83F", device_type="stm32", timeout=20) as board:
+       print(board.info.stm32, board.info.e73)
+       board.start()
+       batch = board.read(250, timeout=5)
+       board.stop()
+
+``"bound"`` 或 ``"legacy"`` 模式的 Dongle 使用 ``esb://PORT``（不带 ``?board=...``）。
+
 要求 E73 SPI 桥接固件；实际 TX/RX 均为 2M，MTU 至少 153。链路自检镜像不能
 完成 STM32 配置。STM32 必须支持 32.0.5 系列的 AE/BE 完整配置事务，32.0.4
-不兼容此路径。当前固件仅提供板端 USB CDC 与 E73 BLE 直连，已移除 ESB Dongle
-和双模式切换；本绑定不自动重连。
+不兼容此路径。本绑定不自动重连。
 
 ``board.info.stm32`` 与 ``board.info.e73`` 分别给出各组件独立报告的版本、Git
 revision、dirty、状态和协议；``state`` 为 ``available``、``unsupported``、

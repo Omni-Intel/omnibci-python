@@ -1,4 +1,5 @@
 import binascii
+import json
 
 import numpy as np
 import omnibci as o
@@ -200,3 +201,91 @@ def test_malformed_native_batch_keeps_consumed_partial():
     with pytest.raises(o.TransportError) as error:
         board.read(2)
     assert error.value.partial.sequence.tolist() == [1]
+
+
+def test_discover_dongles_and_esb_transport(monkeypatch):
+    payload = [
+        {
+            "port": "COM28",
+            "mode": "search",
+            "firmware_version": "0.7.0",
+            "boards": [
+                {"id": "A344B3C4FCB2E83F", "port": "COM28", "rssi_dbm": -58},
+            ],
+        },
+        {
+            "port": "COM29",
+            "mode": "bound",
+            "firmware_version": None,
+            "boards": [],
+        },
+    ]
+    monkeypatch.setattr(
+        o._native, "discover_dongles_json", lambda t: json.dumps(payload)
+    )
+
+    dongles = o.Board.discover_dongles(timeout=5)
+    assert dongles == [
+        o.DongleInfo(
+            port="COM28",
+            mode="search",
+            firmware_version="0.7.0",
+            boards=(
+                o.DongleBoardInfo(id="A344B3C4FCB2E83F", port="COM28", rssi_dbm=-58),
+            ),
+        ),
+        o.DongleInfo(port="COM29", mode="bound", firmware_version=None, boards=()),
+    ]
+    assert dongles[0].endpoint == "esb://COM28"
+    assert dongles[0].boards[0].endpoint == "esb://COM28?board=A344B3C4FCB2E83F"
+
+    devices = o.Board.discover(transport="esb", device_type="stm32", timeout=5)
+    assert devices == [
+        o.DeviceInfo(
+            id="COM28?board=A344B3C4FCB2E83F",
+            name="OmniBCI-32CH · A344B3C4FCB2E83F",
+            transport="esb",
+            address="COM28",
+            rssi_dbm=-58,
+            device_type="stm32",
+        ),
+        o.DeviceInfo(
+            id="COM29",
+            name="ESB Dongle (COM29)",
+            transport="esb",
+            address="COM29",
+            rssi_dbm=None,
+            device_type="stm32",
+        ),
+    ]
+    assert devices[0].endpoint == "esb://COM28?board=A344B3C4FCB2E83F"
+    assert devices[1].endpoint == "esb://COM29"
+
+    with pytest.raises(ValueError, match="stm32"):
+        o.Board.discover(transport="esb", device_type="esp32")
+
+
+def test_connect_accepts_dongle_objects_and_validates_esb(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        o._native.NativeDevice,
+        "connect",
+        staticmethod(lambda *args: seen.append(args) or object()),
+    )
+    board_info = o.DongleBoardInfo(id="A344B3C4FCB2E83F", port="COM28", rssi_dbm=-60)
+    dongle_info = o.DongleInfo(port="COM29", mode="bound")
+    o.Board.connect(board_info, timeout=12)
+    o.Board.connect(dongle_info, timeout=8)
+    assert seen == [
+        ("esb://COM28?board=A344B3C4FCB2E83F", 12.0, "stm32"),
+        ("esb://COM29", 8.0, "stm32"),
+    ]
+    with pytest.raises(ValueError, match="conflicts"):
+        o.Board.connect(board_info, device_type="esp32")
+
+
+def test_native_esb_endpoint_validation():
+    with pytest.raises(o.ConfigurationError):
+        o.Board.connect("esb://COM28?board=A344B3C4FCB2E83F", device_type="esp32")
+    with pytest.raises(o.ConfigurationError):
+        o.Board.connect("esb://COM28?board=INVALID", device_type="stm32")
